@@ -42,7 +42,7 @@ Ensure the module is included by checking the version output.
 :8080 {
     route {
         caddy_mib {
-            error_codes 404 500       # Error codes to track
+            error_codes 404           # Error codes to track
             max_error_count 5         # Number of errors allowed before ban (1 is added internally)
             ban_duration 10m          # Ban duration for violating IPs
             output stdout             # Log output (stdout/stderr)
