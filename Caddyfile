@@ -1,0 +1,19 @@
+:8080 {
+    route {
+        caddy_mib {
+            error_codes 404 500
+            max_error_count 100
+            ban_duration 10m
+            output stdout
+        }
+
+        file_server {
+            root /Users/fab/caddy-mib
+        }
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}
