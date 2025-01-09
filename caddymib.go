@@ -2,6 +2,7 @@ package caddymib
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -30,6 +31,8 @@ type Middleware struct {
 	errorCounts   map[string]int
 	bannedIPs     map[string]time.Time
 	mu            sync.RWMutex
+
+	BanDurationMultiplier float64 `json:"ban_duration_multiplier,omitempty"` // New field
 }
 
 // CaddyModule returns the Caddy module information.
@@ -53,7 +56,9 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 	if m.BanDuration == 0 {
 		m.BanDuration = caddy.Duration(10 * time.Minute) // Default to 10 minutes ban duration
 	}
-
+	if m.BanDurationMultiplier == 0 {
+		m.BanDurationMultiplier = 1 // Default to no increase in ban duration
+	}
 	m.logger.Info("Caddy MIB middleware provisioned",
 		zap.Ints("error_codes", m.ErrorCodes),
 		zap.Int("max_error_count", m.MaxErrorCount),
@@ -84,8 +89,6 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 		m.logger.Error("failed to parse client IP", zap.Error(err), zap.String("remote_addr", r.RemoteAddr))
 		return next.ServeHTTP(w, r)
 	}
-
-	m.logger.Debug("request received", zap.String("ip", clientIP), zap.String("path", r.URL.Path))
 
 	// Check if the IP is banned
 	m.mu.RLock()
@@ -139,13 +142,16 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 				m.logger.Debug("error count incremented", zap.String("ip", clientIP), zap.Int("error_code", code), zap.Int("new_error_count", m.errorCounts[clientIP]), zap.Int("max_error_count", m.MaxErrorCount))
 
 				if m.errorCounts[clientIP] >= m.MaxErrorCount {
-					m.bannedIPs[clientIP] = time.Now().Add(time.Duration(m.BanDuration))
+					// Calculate dynamic ban duration
+					offenses := m.errorCounts[clientIP] - m.MaxErrorCount + 1
+					banDuration := time.Duration(m.BanDuration) * time.Duration(math.Pow(m.BanDurationMultiplier, float64(offenses)))
+					m.bannedIPs[clientIP] = time.Now().Add(banDuration)
 					m.logger.Info("IP banned",
 						zap.String("ip", clientIP),
 						zap.Int("error_code", code),
 						zap.Int("error_count", m.errorCounts[clientIP]),
 						zap.Int("max_error_count", m.MaxErrorCount),
-						zap.Duration("ban_duration", time.Duration(m.BanDuration)),
+						zap.Duration("ban_duration", banDuration),
 						zap.Time("ban_expires_at", m.bannedIPs[clientIP]),
 						zap.String("path", r.URL.Path),
 					)
@@ -172,13 +178,16 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 			m.logger.Debug("error count incremented", zap.String("ip", clientIP), zap.Int("error_code", code), zap.Int("new_error_count", m.errorCounts[clientIP]), zap.Int("max_error_count", m.MaxErrorCount))
 
 			if m.errorCounts[clientIP] >= m.MaxErrorCount {
-				m.bannedIPs[clientIP] = time.Now().Add(time.Duration(m.BanDuration))
+				// Calculate dynamic ban duration
+				offenses := m.errorCounts[clientIP] - m.MaxErrorCount + 1
+				banDuration := time.Duration(m.BanDuration) * time.Duration(math.Pow(m.BanDurationMultiplier, float64(offenses)))
+				m.bannedIPs[clientIP] = time.Now().Add(banDuration)
 				m.logger.Info("IP banned",
 					zap.String("ip", clientIP),
 					zap.Int("error_code", code),
 					zap.Int("error_count", m.errorCounts[clientIP]),
 					zap.Int("max_error_count", m.MaxErrorCount),
-					zap.Duration("ban_duration", time.Duration(m.BanDuration)),
+					zap.Duration("ban_duration", banDuration),
 					zap.Time("ban_expires_at", m.bannedIPs[clientIP]),
 					zap.String("path", r.URL.Path),
 				)
@@ -267,6 +276,16 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.Errf("invalid ban_duration: %v", err)
 				}
 				m.BanDuration = caddy.Duration(dur)
+
+			case "ban_duration_multiplier": // New option
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				multiplier, err := strconv.ParseFloat(d.Val(), 64)
+				if err != nil {
+					return d.Errf("invalid ban_duration_multiplier: %s", d.Val())
+				}
+				m.BanDurationMultiplier = multiplier
 
 			case "output":
 				if !d.NextArg() {
