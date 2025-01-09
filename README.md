@@ -128,6 +128,8 @@ INFO	http.handlers.caddy_mib	IP is currently banned	{"ip": "::1", "path": "/none
 INFO	http.handlers.caddy_mib	IP is whitelisted, skipping middleware	{"ip": "192.168.1.1", "path": "/nonexistent-file"}
 ```
 
+---
+
 # 🌐 Combining Caddy Modules for Enhanced Security
 
 Did you know you can combine **caddy-waf**, **caddy-mib**, and **caddy-mlf** to create a robust multi-layered security solution for your web applications? By chaining these modules, you can leverage their unique features to provide comprehensive protection against web attacks, abusive behavior, and suspicious traffic patterns.
@@ -151,18 +153,13 @@ Here’s an example configuration to chain the modules:
 ### Flow:
 1. **caddy-waf**: Listens on `localhost:8080` and forwards requests to **caddy-mib**.
 2. **caddy-mib**: Listens on `localhost:8081` and forwards requests to **caddy-mlf**.
-3. **caddy-mlf**: Listens on `localhost:8082` and returns a `200 OK` response for legitimate requests or forwards requests to your **origin applications**. 
+3. **caddy-mlf**: Listens on `localhost:8082` and returns a `200 OK` response for legitimate requests or forwards requests to your **origin applications**.
 
 ---
 
 ## License
 This project is licensed under the **AGPL-3.0 License**. See the [LICENSE](LICENSE) file for details.
 
----
-
-
-
----
 
 ## Support
 If you encounter any issues or have questions, please [open an issue](https://github.com/fabriziosalmi/caddy-mib/issues).
