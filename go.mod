@@ -39,4 +39,5 @@ require (
 	golang.org/x/time v0.7.0 // indirect
 	golang.org/x/tools v0.22.0 // indirect
 	google.golang.org/protobuf v1.35.1 // indirect
+	github.com/fabriziosalmi/caddy-mib
 )
