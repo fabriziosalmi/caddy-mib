@@ -8,11 +8,12 @@
 :8080 {
     route {
         caddy_mib {
-            error_codes 404               # Track 404 errors
-            max_error_count 5             # Number of errors allowed before ban
-            ban_duration 10m              # Ban duration for violating IPs
-            ban_duration_multiplier 2     # Ban duration multiplier for each violation
-            output stdout                 # Log output (stdout/stderr)
+            error_codes 404
+            max_error_count 5
+            ban_duration 10m
+            ban_duration_multiplier 2
+            output stdout
+            whitelist 192.168.1.10 10.0.0.0/24 2001:db8::1
         }
         file_server {
             root /var/www/html
