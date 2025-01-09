@@ -1,4 +1,4 @@
-# Caddy MIB - Middleware for IP Banning
+# Caddy MIB - Caddy Middleware for IP Banning
 
 ## Overview
 **Caddy MIB (Middleware IP Ban)** is a custom Caddy HTTP middleware designed to track client IPs generating repetitive errors (such as `404` or `500`) and temporarily ban them after exceeding a specified threshold. This middleware helps mitigate brute force attacks, excessive requests for non-existent resources, or other abusive behavior by blocking IPs that breach the configured error limits.
@@ -6,18 +6,32 @@
 ---
 
 ## Features
-- **Track Specific HTTP Error Codes**: Configure which HTTP error codes (e.g., `404`, `500`) to track.
-- **Set Error Thresholds**: Define the maximum number of errors allowed per IP before banning.
-- **Custom Ban Duration**: Specify how long an IP should be banned (e.g., `10m`, `1h`).
-- **Dynamic Configuration**: Easily configure the middleware using the Caddyfile.
-- **Debug Logging**: Detailed logs to track IP bans, error counts, and request statuses.
-- **Automatic Unbanning**: Banned IPs are automatically unbanned after the ban duration expires.
+- **[Track Specific HTTP Error Codes](#configuration)**: Configure which HTTP error codes (e.g., `404`, `500`) to track.
+- **[Set Error Thresholds](#configuration)**: Define the maximum number of errors allowed per IP before banning.
+- **[Custom Ban Duration](#configuration)**: Specify how long an IP should be banned (e.g., `10m`, `1h`).
+- **[Dynamic Ban Duration](#configuration)**: Increase ban duration exponentially with repeated offenses.
+- **[Dynamic Configuration](#configuration)**: Easily configure the middleware using the Caddyfile.
+- **[Debug Logging](#debugging)**: Detailed logs to track IP bans, error counts, and request statuses.
+- **[Automatic Unbanning](#overview)**: Banned IPs are automatically unbanned after the ban duration expires.
 
 ---
 
 ## Requirements
 - **Go 1.20 or later**
 - **Caddy v2.9.0 or later**
+
+---
+
+## Internal Links
+- **[Overview](#overview)**: Learn about the purpose and functionality of Caddy MIB.
+- **[Features](#features)**: Explore the key features of the middleware.
+- **[Installation](#installation)**: Step-by-step guide to install and build the middleware.
+- **[Configuration](#configuration)**: Configure the middleware using the Caddyfile.
+- **[Usage](#usage)**: Example scenario and testing instructions.
+- **[Debugging](#debugging)**: Understand how to debug and interpret logs.
+- **[License](#license)**: View the project's license.
+- **[Contributions](#contributions)**: Contribute to the project.
+- **[Support](#support)**: Get help and report issues.
 
 ---
 
@@ -51,7 +65,8 @@ Ensure the `caddy-mib` module is included by checking the version output.
         caddy_mib {
             error_codes 404           # Error codes to track (e.g., 404, 500)
             max_error_count 5         # Number of errors allowed before banning
-            ban_duration 10m          # Duration to ban IPs (e.g., 10m, 1h)
+            ban_duration 10m          # Base duration to ban IPs (e.g., 10m, 1h)
+            ban_duration_multiplier 2 # Increase ban duration exponentially (e.g., 2x)
             output stdout             # Log output (stdout or stderr)
         }
         file_server {
@@ -68,7 +83,8 @@ Ensure the `caddy-mib` module is included by checking the version output.
 ### Directive Options
 - **`error_codes`**: List of space-separated HTTP error codes to track (e.g., `404 500`).
 - **`max_error_count`**: Maximum number of errors allowed before banning an IP.
-- **`ban_duration`**: Duration to ban IPs (supports values like `1m`, `5m`, `1h`).
+- **`ban_duration`**: Base duration to ban IPs (supports values like `1m`, `5m`, `1h`).
+- **`ban_duration_multiplier`**: Multiplier to increase ban duration exponentially with repeated offenses (e.g., `2` for 2x increase).
 - **`output`**: Log output stream (`stdout` or `stderr`).
 
 ---
@@ -78,7 +94,8 @@ Ensure the `caddy-mib` module is included by checking the version output.
 ### Example Scenario
 1. A client repeatedly requests a non-existent resource (`/nonexistent-file`), resulting in `404 Not Found` errors.
 2. After 5 such errors, the client's IP is banned for 10 minutes.
-3. Subsequent requests from the banned IP return `403 Forbidden` until the ban expires.
+3. If the client continues to generate errors, the ban duration increases exponentially (e.g., 20m, 40m, etc.).
+4. Subsequent requests from the banned IP return `403 Forbidden` until the ban expires.
 
 ### Testing
 Run the following command to test the middleware:
@@ -121,4 +138,7 @@ Contributions are welcome! If you have suggestions, bug reports, or feature requ
 ---
 
 ## Support
-If you encounter any issues or have questions please open an issue.
+If you encounter any issues or have questions, please [open an issue](https://github.com/fabriziosalmi/caddy-mib/issues).
+
+
+
