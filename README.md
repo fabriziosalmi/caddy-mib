@@ -10,6 +10,7 @@
 - **[Set Error Thresholds](#configuration)**: Define the maximum number of errors allowed per IP before banning.
 - **[Custom Ban Duration](#configuration)**: Specify how long an IP should be banned (e.g., `10m`, `1h`).
 - **[Dynamic Ban Duration](#configuration)**: Increase ban duration exponentially with repeated offenses.
+- **[Whitelist Trusted IPs](#configuration)**: Exempt specific IPs from banning, even if they trigger errors.
 - **[Dynamic Configuration](#configuration)**: Easily configure the middleware using the Caddyfile.
 - **[Debug Logging](#debugging)**: Detailed logs to track IP bans, error counts, and request statuses.
 - **[Automatic Unbanning](#overview)**: Banned IPs are automatically unbanned after the ban duration expires.
@@ -68,6 +69,7 @@ Ensure the `caddy-mib` module is included by checking the version output.
             ban_duration 10m          # Base duration to ban IPs (e.g., 10m, 1h)
             ban_duration_multiplier 2 # Increase ban duration exponentially (e.g., 2x)
             output stdout             # Log output (stdout or stderr)
+            whitelist 192.168.1.1     # Whitelist specific IPs (comma-separated)
         }
         file_server {
             root /var/www/html        # Serve files from this directory
@@ -86,6 +88,7 @@ Ensure the `caddy-mib` module is included by checking the version output.
 - **`ban_duration`**: Base duration to ban IPs (supports values like `1m`, `5m`, `1h`).
 - **`ban_duration_multiplier`**: Multiplier to increase ban duration exponentially with repeated offenses (e.g., `2` for 2x increase).
 - **`output`**: Log output stream (`stdout` or `stderr`).
+- **`whitelist`**: List of IPs to exempt from banning (e.g., `192.168.1.1`).
 
 ---
 
@@ -95,7 +98,8 @@ Ensure the `caddy-mib` module is included by checking the version output.
 1. A client repeatedly requests a non-existent resource (`/nonexistent-file`), resulting in `404 Not Found` errors.
 2. After 5 such errors, the client's IP is banned for 10 minutes.
 3. If the client continues to generate errors, the ban duration increases exponentially (e.g., 20m, 40m, etc.).
-4. Subsequent requests from the banned IP return `403 Forbidden` until the ban expires.
+4. Whitelisted IPs are never banned, even if they trigger errors.
+5. Subsequent requests from the banned IP return `403 Forbidden` until the ban expires.
 
 ### Testing
 Run the following command to test the middleware:
@@ -121,6 +125,7 @@ tail -f /var/log/caddy/access.log
 ```bash
 INFO	http.handlers.caddy_mib	IP banned	{"ip": "::1", "error_code": 404, "error_count": 5, "max_error_count": 5, "ban_duration": "10m0s", "ban_expires_at": "2025-01-09T16:21:45.435Z", "path": "/nonexistent-file"}
 INFO	http.handlers.caddy_mib	IP is currently banned	{"ip": "::1", "path": "/nonexistent-file", "ban_expires_at": "2025-01-09T16:21:45.435Z"}
+INFO	http.handlers.caddy_mib	IP is whitelisted, skipping middleware	{"ip": "192.168.1.1", "path": "/nonexistent-file"}
 ```
 
 ---
@@ -139,6 +144,3 @@ Contributions are welcome! If you have suggestions, bug reports, or feature requ
 
 ## Support
 If you encounter any issues or have questions, please [open an issue](https://github.com/fabriziosalmi/caddy-mib/issues).
-
-
-
