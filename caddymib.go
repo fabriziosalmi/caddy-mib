@@ -23,16 +23,17 @@ func init() {
 
 // Middleware implements the Caddy MIB middleware.
 type Middleware struct {
-	ErrorCodes    []int          `json:"error_codes,omitempty"`
-	MaxErrorCount int            `json:"max_error_count,omitempty"`
-	BanDuration   caddy.Duration `json:"ban_duration,omitempty"`
-	Output        string         `json:"output,omitempty"`
-	logger        *zap.Logger
-	errorCounts   map[string]int
-	bannedIPs     map[string]time.Time
-	mu            sync.RWMutex
-
-	BanDurationMultiplier float64 `json:"ban_duration_multiplier,omitempty"` // New field
+	ErrorCodes            []int          `json:"error_codes,omitempty"`
+	MaxErrorCount         int            `json:"max_error_count,omitempty"`
+	BanDuration           caddy.Duration `json:"ban_duration,omitempty"`
+	Output                string         `json:"output,omitempty"`
+	logger                *zap.Logger
+	errorCounts           map[string]int
+	bannedIPs             map[string]time.Time
+	mu                    sync.RWMutex
+	BanDurationMultiplier float64  `json:"ban_duration_multiplier,omitempty"`
+	Whitelist             []string `json:"whitelist,omitempty"` // New field for whitelisted IPs/networks
+	whitelistedNets       []*net.IPNet
 }
 
 // CaddyModule returns the Caddy module information.
@@ -44,28 +45,49 @@ func (Middleware) CaddyModule() caddy.ModuleInfo {
 }
 
 // Provision sets up the middleware.
+// Provision sets up the middleware.
 func (m *Middleware) Provision(ctx caddy.Context) error {
 	m.errorCounts = make(map[string]int)
 	m.bannedIPs = make(map[string]time.Time)
-	m.logger = ctx.Logger(m) // Initialize logger here
+	m.logger = ctx.Logger(m)
 
-	// Set default values if not configured
 	if m.MaxErrorCount == 0 {
-		m.MaxErrorCount = 5 // Default to 5 errors before banning
+		m.MaxErrorCount = 5
 	}
 	if m.BanDuration == 0 {
-		m.BanDuration = caddy.Duration(10 * time.Minute) // Default to 10 minutes ban duration
+		m.BanDuration = caddy.Duration(10 * time.Minute)
 	}
 	if m.BanDurationMultiplier == 0 {
-		m.BanDurationMultiplier = 1 // Default to no increase in ban duration
+		m.BanDurationMultiplier = 1
 	}
+
+	// Process the whitelist
+	for _, cidr := range m.Whitelist {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			ip := net.ParseIP(cidr)
+			if ip == nil {
+				return fmt.Errorf("invalid IP or CIDR in whitelist: %s", cidr)
+			}
+			// If it's a single IP, create a /32 (IPv4) or /128 (IPv6) CIDR
+			var mask net.IPMask
+			if ip.To4() != nil {
+				mask = net.CIDRMask(32, 32)
+			} else {
+				mask = net.CIDRMask(128, 128)
+			}
+			ipNet = &net.IPNet{IP: ip, Mask: mask}
+		}
+		m.whitelistedNets = append(m.whitelistedNets, ipNet)
+	}
+
 	m.logger.Info("Caddy MIB middleware provisioned",
 		zap.Ints("error_codes", m.ErrorCodes),
 		zap.Int("max_error_count", m.MaxErrorCount),
 		zap.Duration("ban_duration", time.Duration(m.BanDuration)),
+		zap.Any("whitelist", m.Whitelist), // Log the whitelist
 	)
 
-	// Start a background goroutine to clean up expired bans
 	go m.cleanupExpiredBans()
 
 	return nil
@@ -83,11 +105,22 @@ func (m *Middleware) Validate() error {
 }
 
 // ServeHTTP handles the HTTP request.
+// ServeHTTP handles the HTTP request.
 func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		m.logger.Error("failed to parse client IP", zap.Error(err), zap.String("remote_addr", r.RemoteAddr))
 		return next.ServeHTTP(w, r)
+	}
+
+	parsedIP := net.ParseIP(clientIP)
+
+	// Check if the IP is whitelisted
+	for _, ipNet := range m.whitelistedNets {
+		if ipNet.Contains(parsedIP) {
+			m.logger.Debug("client IP is whitelisted, skipping middleware", zap.String("ip", clientIP), zap.String("path", r.URL.Path))
+			return next.ServeHTTP(w, r)
+		}
 	}
 
 	// Check if the IP is banned
@@ -239,6 +272,7 @@ func (m *Middleware) cleanupExpiredBans() {
 }
 
 // UnmarshalCaddyfile parses the Caddyfile configuration.
+// UnmarshalCaddyfile parses the Caddyfile configuration.
 func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		for d.NextBlock(0) {
@@ -277,7 +311,7 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				}
 				m.BanDuration = caddy.Duration(dur)
 
-			case "ban_duration_multiplier": // New option
+			case "ban_duration_multiplier":
 				if !d.NextArg() {
 					return d.ArgErr()
 				}
@@ -286,6 +320,13 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.Errf("invalid ban_duration_multiplier: %s", d.Val())
 				}
 				m.BanDurationMultiplier = multiplier
+
+			case "whitelist":
+				var whitelist []string
+				for d.NextArg() {
+					whitelist = append(whitelist, d.Val())
+				}
+				m.Whitelist = whitelist
 
 			case "output":
 				if !d.NextArg() {
