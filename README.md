@@ -151,7 +151,7 @@ Here’s an example configuration to chain the modules:
 ### Flow:
 1. **caddy-waf**: Listens on `localhost:8080` and forwards requests to **caddy-mib**.
 2. **caddy-mib**: Listens on `localhost:8081` and forwards requests to **caddy-mlf**.
-3. **caddy-mlf**: Listens on `localhost:8082` and returns a `200 OK` response for legitimate requests.
+3. **caddy-mlf**: Listens on `localhost:8082` and returns a `200 OK` response for legitimate requests or forwards requests to your **origin applications**. 
 
 ---
 
