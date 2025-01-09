@@ -47,12 +47,12 @@ func (Middleware) CaddyModule() caddy.ModuleInfo {
 // Provision sets up the middleware.
 // Provision sets up the middleware.
 func (m *Middleware) Provision(ctx caddy.Context) error {
+	// Log the startup message
+	m.logger.Info("Starting Caddy MIB middleware...")
+	
 	m.errorCounts = make(map[string]int)
 	m.bannedIPs = make(map[string]time.Time)
 	m.logger = ctx.Logger(m)
-
-	// Log the startup message
-	m.logger.Info("Starting Caddy MIB middleware...")
 	
 	if m.MaxErrorCount == 0 {
 		m.MaxErrorCount = 5
