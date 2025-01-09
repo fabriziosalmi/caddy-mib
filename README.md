@@ -128,6 +128,31 @@ INFO	http.handlers.caddy_mib	IP is currently banned	{"ip": "::1", "path": "/none
 INFO	http.handlers.caddy_mib	IP is whitelisted, skipping middleware	{"ip": "192.168.1.1", "path": "/nonexistent-file"}
 ```
 
+# 🌐 Combining Caddy Modules for Enhanced Security
+
+Did you know you can combine **caddy-waf**, **caddy-mib**, and **caddy-mlf** to create a robust multi-layered security solution for your web applications? By chaining these modules, you can leverage their unique features to provide comprehensive protection against web attacks, abusive behavior, and suspicious traffic patterns.
+
+## 🔗 Chain Overview
+
+By chaining these modules, you can set up a flow where each layer contributes to filtering, banning, and analyzing traffic for maximum security:
+
+| Module       | Role in the Chain                                                                                           | Repository Link                                   |
+|--------------|------------------------------------------------------------------------------------------------------------|--------------------------------------------------|
+| **caddy-waf** | Acts as the first gate, inspecting and filtering malicious requests based on anomaly scores, rate limits, and blacklists. | [GitHub: caddy-waf](https://github.com/fabriziosalmi/caddy-waf) |
+| **caddy-mib** | Handles IP banning for repeated errors, such as 404 or 500, to prevent brute force or abusive access attempts. | [GitHub: caddy-mib](https://github.com/fabriziosalmi/caddy-mib) |
+| **caddy-mlf** | Provides an additional layer of protection by analyzing request attributes and marking/blocking suspicious traffic based on anomaly thresholds. | [GitHub: caddy-mlf](https://github.com/fabriziosalmi/caddy-mlf) |
+
+---
+
+## 🔧 Example Configuration
+
+Here’s an example configuration to chain the modules:
+
+### Flow:
+1. **caddy-waf**: Listens on `localhost:8080` and forwards requests to **caddy-mib**.
+2. **caddy-mib**: Listens on `localhost:8081` and forwards requests to **caddy-mlf**.
+3. **caddy-mlf**: Listens on `localhost:8082` and returns a `200 OK` response for legitimate requests.
+
 ---
 
 ## License
@@ -135,10 +160,7 @@ This project is licensed under the **AGPL-3.0 License**. See the [LICENSE](LICEN
 
 ---
 
-## Contributions
-Contributions are welcome! If you have suggestions, bug reports, or feature requests, please:
-1. Open an issue on the [GitHub repository](https://github.com/fabriziosalmi/caddy-mib/issues).
-2. Submit a pull request with your changes.
+
 
 ---
 
