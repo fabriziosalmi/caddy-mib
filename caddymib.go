@@ -1,13 +1,10 @@
 package caddymib
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
-	"os"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 
@@ -23,20 +20,19 @@ func init() {
 	httpcaddyfile.RegisterHandlerDirective("caddy_mib", parseCaddyfile)
 }
 
-// Middleware tracks and bans IPs based on repetitive errors.
+// Middleware implements the Caddy MIB middleware.
 type Middleware struct {
-	ErrorCodes    []int                `json:"error_codes,omitempty"`
-	MaxErrorCount int                  `json:"max_error_count,omitempty"`
-	BanDuration   caddy.Duration       `json:"ban_duration,omitempty"`
-	ErrorCounts   map[string]int       `json:"-"`
-	BannedIPs     map[string]time.Time `json:"-"`
-	mu            sync.Mutex
+	ErrorCodes    []int          `json:"error_codes,omitempty"`
+	MaxErrorCount int            `json:"max_error_count,omitempty"`
+	BanDuration   caddy.Duration `json:"ban_duration,omitempty"`
+	Output        string         `json:"output,omitempty"`
 	logger        *zap.Logger
-	w             io.Writer
-	Output        string `json:"output,omitempty"`
+	errorCounts   map[string]int
+	bannedIPs     map[string]time.Time
+	mu            sync.RWMutex
 }
 
-// CaddyModule registers the module.
+// CaddyModule returns the Caddy module information.
 func (Middleware) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "http.handlers.caddy_mib",
@@ -44,193 +40,262 @@ func (Middleware) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
-// Provision configures the middleware during initialization.
+// Provision sets up the middleware.
 func (m *Middleware) Provision(ctx caddy.Context) error {
-	m.logger = ctx.Logger(m)
-	m.ErrorCounts = make(map[string]int)
-	m.BannedIPs = make(map[string]time.Time)
+	m.errorCounts = make(map[string]int)
+	m.bannedIPs = make(map[string]time.Time)
+	m.logger = ctx.Logger(m) // Initialize logger here
 
-	switch m.Output {
-	case "stdout":
-		m.w = os.Stdout
-	case "stderr":
-		m.w = os.Stderr
-	default:
-		return fmt.Errorf("output stream must be stdout or stderr")
+	// Set default values if not configured
+	if m.MaxErrorCount == 0 {
+		m.MaxErrorCount = 5 // Default to 5 errors before banning
 	}
-	m.logger.Info("Middleware provisioned", zap.Any("config", m))
+	if m.BanDuration == 0 {
+		m.BanDuration = caddy.Duration(10 * time.Minute) // Default to 10 minutes ban duration
+	}
+
+	m.logger.Info("Caddy MIB middleware provisioned",
+		zap.Ints("error_codes", m.ErrorCodes),
+		zap.Int("max_error_count", m.MaxErrorCount),
+		zap.Duration("ban_duration", time.Duration(m.BanDuration)),
+	)
+
+	// Start a background goroutine to clean up expired bans
+	go m.cleanupExpiredBans()
+
 	return nil
 }
 
 // Validate ensures the configuration is valid.
 func (m *Middleware) Validate() error {
-	if len(m.ErrorCodes) == 0 {
-		return fmt.Errorf("at least one error code must be specified")
-	}
 	if m.MaxErrorCount <= 0 {
 		return fmt.Errorf("max_error_count must be greater than 0")
 	}
 	if m.BanDuration <= 0 {
 		return fmt.Errorf("ban_duration must be greater than 0")
 	}
-	if m.w == nil {
-		return fmt.Errorf("no output stream specified")
-	}
 	return nil
 }
 
-// ServeHTTP handles incoming HTTP requests, tracks errors, and enforces IP bans.
+// ServeHTTP handles the HTTP request.
 func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		m.logger.Error("Failed to parse client IP", zap.Error(err))
-		return caddyhttp.Error(http.StatusInternalServerError, fmt.Errorf("internal server error"))
-	}
-	if forwardedFor := r.Header.Get("X-Forwarded-For"); forwardedFor != "" {
-		clientIP = strings.TrimSpace(strings.Split(forwardedFor, ",")[0])
+		m.logger.Error("failed to parse client IP", zap.Error(err), zap.String("remote_addr", r.RemoteAddr))
+		return next.ServeHTTP(w, r)
 	}
 
-	m.logger.Debug("Request received",
-		zap.String("ip", clientIP),
-		zap.String("path", r.URL.Path),
-		zap.String("method", r.Method),
-	)
+	m.logger.Debug("request received", zap.String("ip", clientIP), zap.String("path", r.URL.Path))
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// Check if the IP is banned
+	m.mu.RLock()
+	banTime, banned := m.bannedIPs[clientIP]
+	m.mu.RUnlock()
 
-	// Check if IP is banned
-	if banTime, banned := m.BannedIPs[clientIP]; banned {
-		if time.Since(banTime) < time.Duration(m.BanDuration) {
-			m.logger.Info("IP is currently banned",
-				zap.String("ip", clientIP),
-				zap.Time("ban_expires", banTime.Add(time.Duration(m.BanDuration))),
-			)
-			return caddyhttp.Error(http.StatusForbidden, fmt.Errorf("IP banned"))
+	if banned {
+		if time.Now().Before(banTime) {
+			m.logger.Info("IP is currently banned", zap.String("ip", clientIP), zap.String("path", r.URL.Path), zap.Time("ban_expires_at", banTime))
+			w.WriteHeader(http.StatusForbidden)
+			return nil
+		} else {
+			// Unban the IP if the ban duration has expired
+			m.logger.Info("unbanning IP because ban expired", zap.String("ip", clientIP), zap.String("path", r.URL.Path), zap.Time("was_banned_until", banTime))
+			m.mu.Lock()
+			delete(m.bannedIPs, clientIP)
+			delete(m.errorCounts, clientIP)
+			m.mu.Unlock()
 		}
-		delete(m.BannedIPs, clientIP)
-		m.logger.Info("Ban expired", zap.String("ip", clientIP))
 	}
 
-	// Wrap response to track status codes
-	buf := new(bytes.Buffer)
-	recorder := caddyhttp.NewResponseRecorder(w, buf, func(status int, header http.Header) bool {
-		return true
-	})
-
-	// Call the next handler
-	err = next.ServeHTTP(recorder, r)
-	statusCode := recorder.Status()
-
-	// If no status is set, assume 404
-	if statusCode == 0 {
-		m.logger.Warn("Status code was zero; defaulting to 404 Not Found")
-		statusCode = http.StatusNotFound
+	// If no error codes are specified, skip the middleware
+	if len(m.ErrorCodes) == 0 {
+		m.logger.Debug("skipping middleware because no error codes are specified", zap.String("ip", clientIP), zap.String("path", r.URL.Path))
+		return next.ServeHTTP(w, r)
 	}
 
-	m.logger.Debug("Handler returned status", zap.Int("status_code", statusCode))
+	// Create a response recorder to capture the status code
+	rec := caddyhttp.NewResponseRecorder(w, nil, nil)
 
-	// Handle 404 specifically
-	if statusCode == http.StatusNotFound {
-		m.logger.Warn("Resource not found",
-			zap.String("path", r.URL.Path),
-			zap.String("ip", clientIP),
-		)
-		m.ErrorCounts[clientIP]++
-
-		// Ban after threshold exceeded
-		if m.ErrorCounts[clientIP] >= m.MaxErrorCount {
-			m.BannedIPs[clientIP] = time.Now()
-			m.logger.Info("IP banned due to excessive 404 errors",
-				zap.String("ip", clientIP),
-				zap.Int("error_count", m.ErrorCounts[clientIP]),
-			)
-			delete(m.ErrorCounts, clientIP)
-			return caddyhttp.Error(http.StatusForbidden, fmt.Errorf("IP banned"))
-		}
-
-		// Write 404 response without triggering 500
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte("404 Not Found"))
-		return nil
-	}
-
-	// Handle other errors
+	// Pass the request to the next handler
+	err = next.ServeHTTP(rec, r)
 	if err != nil {
-		m.logger.Error("Handler encountered an error", zap.String("ip", clientIP), zap.Error(err))
-		w.WriteHeader(http.StatusInternalServerError)
+		m.logger.Error("error in next handler", zap.Error(err), zap.String("ip", clientIP), zap.String("path", r.URL.Path))
+
+		// Extract the status code from the error message
+		statusCode := extractStatusCodeFromError(err)
+		if statusCode == 0 {
+			// If no status code is found, return the error
+			return err
+		}
+
+		m.logger.Debug("extracted status code from error", zap.Int("status_code", statusCode), zap.String("ip", clientIP), zap.String("path", r.URL.Path))
+
+		// Track the error if the status code matches
+		for _, code := range m.ErrorCodes {
+			if statusCode == code {
+				m.mu.Lock()
+				m.logger.Debug("tracking error", zap.String("ip", clientIP), zap.Int("error_code", code), zap.Int("current_error_count", m.errorCounts[clientIP]), zap.Int("max_error_count", m.MaxErrorCount))
+				m.errorCounts[clientIP]++
+				m.logger.Debug("error count incremented", zap.String("ip", clientIP), zap.Int("error_code", code), zap.Int("new_error_count", m.errorCounts[clientIP]), zap.Int("max_error_count", m.MaxErrorCount))
+
+				if m.errorCounts[clientIP] >= m.MaxErrorCount {
+					m.bannedIPs[clientIP] = time.Now().Add(time.Duration(m.BanDuration))
+					m.logger.Info("IP banned",
+						zap.String("ip", clientIP),
+						zap.Int("error_code", code),
+						zap.Int("error_count", m.errorCounts[clientIP]),
+						zap.Int("max_error_count", m.MaxErrorCount),
+						zap.Duration("ban_duration", time.Duration(m.BanDuration)),
+						zap.Time("ban_expires_at", m.bannedIPs[clientIP]),
+						zap.String("path", r.URL.Path),
+					)
+					w.WriteHeader(http.StatusForbidden)
+					m.mu.Unlock()
+					return nil
+				}
+				m.mu.Unlock()
+				break
+			}
+		}
 		return err
 	}
 
-	// Write headers and response
-	for k, v := range recorder.Header() {
-		w.Header().Set(k, v[0])
-	}
-	w.WriteHeader(statusCode)
-	_, _ = w.Write(buf.Bytes())
+	// Check the response status code
+	statusCode := rec.Status()
+	m.logger.Debug("response status code", zap.Int("status_code", statusCode), zap.String("ip", clientIP), zap.String("path", r.URL.Path))
 
-	m.logger.Debug("Response status", zap.Int("status_code", statusCode))
+	for _, code := range m.ErrorCodes {
+		if statusCode == code {
+			m.mu.Lock()
+			m.logger.Debug("tracking error", zap.String("ip", clientIP), zap.Int("error_code", code), zap.Int("current_error_count", m.errorCounts[clientIP]), zap.Int("max_error_count", m.MaxErrorCount))
+			m.errorCounts[clientIP]++
+			m.logger.Debug("error count incremented", zap.String("ip", clientIP), zap.Int("error_code", code), zap.Int("new_error_count", m.errorCounts[clientIP]), zap.Int("max_error_count", m.MaxErrorCount))
+
+			if m.errorCounts[clientIP] >= m.MaxErrorCount {
+				m.bannedIPs[clientIP] = time.Now().Add(time.Duration(m.BanDuration))
+				m.logger.Info("IP banned",
+					zap.String("ip", clientIP),
+					zap.Int("error_code", code),
+					zap.Int("error_count", m.errorCounts[clientIP]),
+					zap.Int("max_error_count", m.MaxErrorCount),
+					zap.Duration("ban_duration", time.Duration(m.BanDuration)),
+					zap.Time("ban_expires_at", m.bannedIPs[clientIP]),
+					zap.String("path", r.URL.Path),
+				)
+				w.WriteHeader(http.StatusForbidden)
+				m.mu.Unlock()
+				return nil
+			}
+			m.mu.Unlock()
+			break
+		}
+	}
+	m.logger.Debug("ServeHTTP finished processing request", zap.String("ip", clientIP), zap.Int("status_code", statusCode), zap.String("path", r.URL.Path))
+
 	return nil
 }
 
-// UnmarshalCaddyfile parses the Caddyfile configuration for this module.
+// extractStatusCodeFromError extracts the HTTP status code from the error message.
+func extractStatusCodeFromError(err error) int {
+	// Example error message: "fileserver.(*FileServer).notFound (staticfiles.go:705): HTTP 404"
+	if err == nil {
+		return 0
+	}
+
+	// Look for "HTTP <status_code>" in the error message
+	errMsg := err.Error()
+	if len(errMsg) >= 6 && errMsg[len(errMsg)-3:] == "404" {
+		return 404
+	}
+
+	return 0
+}
+
+// cleanupExpiredBans periodically cleans up expired bans.
+func (m *Middleware) cleanupExpiredBans() {
+	for {
+		time.Sleep(time.Minute) // Run cleanup every minute
+
+		m.mu.Lock()
+		now := time.Now()
+		for ip, banTime := range m.bannedIPs {
+			if now.After(banTime) {
+				delete(m.bannedIPs, ip)
+				delete(m.errorCounts, ip)
+				m.logger.Info("cleaned up expired ban", zap.String("ip", ip))
+			}
+		}
+		m.mu.Unlock()
+	}
+}
+
+// UnmarshalCaddyfile parses the Caddyfile configuration.
 func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
-		if d.NextArg() && d.Val() != "caddy_mib" {
-			return d.ArgErr()
-		}
 		for d.NextBlock(0) {
 			switch d.Val() {
-			case "output":
-				if !d.Args(&m.Output) {
-					return d.ArgErr()
-				}
 			case "error_codes":
-				m.ErrorCodes = []int{}
-				args := d.RemainingArgs()
-				for _, arg := range args {
-					code, err := parseInt(arg)
+				var codes []int
+				for d.NextArg() {
+					code, err := strconv.Atoi(d.Val())
 					if err != nil {
-						return d.Errf("invalid error code: %v", err)
+						return d.Errf("invalid error code: %s", d.Val())
 					}
-					m.ErrorCodes = append(m.ErrorCodes, code)
+					codes = append(codes, code)
 				}
+				if len(codes) == 0 {
+					return d.Err("error_codes needs at least one argument")
+				}
+				m.ErrorCodes = codes
+
 			case "max_error_count":
 				if !d.NextArg() {
 					return d.ArgErr()
 				}
-				count, err := parseInt(d.Val())
+				count, err := strconv.Atoi(d.Val())
 				if err != nil {
-					return d.Errf("invalid max_error_count: %v", err)
+					return d.Errf("invalid max_error_count: %s", d.Val())
 				}
-				m.MaxErrorCount = count + 1
+				m.MaxErrorCount = count
+
 			case "ban_duration":
 				if !d.NextArg() {
 					return d.ArgErr()
 				}
-				duration, err := time.ParseDuration(d.Val())
+				dur, err := time.ParseDuration(d.Val())
 				if err != nil {
 					return d.Errf("invalid ban_duration: %v", err)
 				}
-				m.BanDuration = caddy.Duration(duration)
+				m.BanDuration = caddy.Duration(dur)
+
+			case "output":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				m.Output = d.Val()
+
 			default:
-				return d.Errf("unrecognized subdirective: %s", d.Val())
+				return d.Errf("unrecognized option: %s", d.Val())
 			}
 		}
 	}
 	return nil
 }
 
-func parseInt(s string) (int, error) {
-	var i int
-	_, err := fmt.Sscanf(s, "%d", &i)
-	return i, err
-}
-
+// parseCaddyfile parses the Caddyfile directive.
 func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
-	var m *Middleware = new(Middleware)
-	if err := m.UnmarshalCaddyfile(h.Dispenser); err != nil {
+	m := Middleware{}
+	err := m.UnmarshalCaddyfile(h.Dispenser)
+	if err != nil {
 		return nil, err
 	}
-	return m, nil
+	return &m, nil
 }
+
+// Interface guards
+var (
+	_ caddy.Provisioner           = (*Middleware)(nil)
+	_ caddy.Validator             = (*Middleware)(nil)
+	_ caddyhttp.MiddlewareHandler = (*Middleware)(nil)
+	_ caddyfile.Unmarshaler       = (*Middleware)(nil)
+)
