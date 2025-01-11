@@ -13,6 +13,7 @@
 - **[Whitelist Trusted IPs](#configuration)**: Exempt specific IPs or CIDR ranges from banning.
 - **[CIDR Range Bans](#configuration)**: Ban entire CIDR ranges instead of individual IPs.
 - **[Custom Ban Response](#configuration)**: Return a custom response body and header for banned IPs.
+- **[Configurable Ban Status Code](#configuration)**: Set a custom HTTP status code for banned IPs (e.g., `403 Forbidden` or `429 Too Many Requests`).
 - **[Debug Logging](#debugging)**: Detailed logs to track IP bans, error counts, and request statuses.
 - **[Automatic Unbanning](#overview)**: Banned IPs are automatically unbanned after the ban duration expires.
 
@@ -83,6 +84,7 @@ Ensure the `caddy-mib` module is included by checking the version output.
             log_request_headers User-Agent X-Forwarded-For # Log specific headers
             custom_response_header "Blocked by Caddy MIB" # Custom header for banned IPs
             ban_response_body "You have been banned due to excessive errors. Please try again later." # Custom ban response
+            ban_status_code 429       # Custom status code for banned IPs (e.g., 403 or 429)
         }
         file_server {
             root /var/www/html # Serve files from this directory
@@ -101,6 +103,7 @@ Ensure the `caddy-mib` module is included by checking the version output.
 - **`log_request_headers`**: List of request headers to log (e.g., `User-Agent`, `X-Forwarded-For`).
 - **`custom_response_header`**: Custom header to include in responses for banned IPs.
 - **`ban_response_body`**: Custom response body to return for banned IPs.
+- **`ban_status_code`**: Custom HTTP status code to return for banned IPs (e.g., `403` or `429`).
 
 ---
 
@@ -111,7 +114,7 @@ Ensure the `caddy-mib` module is included by checking the version output.
 2. After 100 such errors, the client's IP is banned for 1 minute.
 3. If the client continues to generate errors, the ban duration increases exponentially (e.g., 2m, 4m, etc.).
 4. Whitelisted IPs are never banned, even if they trigger errors.
-5. Subsequent requests from the banned IP return `403 Forbidden` with the custom ban response until the ban expires.
+5. Subsequent requests from the banned IP return the configured status code (e.g., `429 Too Many Requests`) with the custom ban response until the ban expires.
 
 ### Testing with Python
 You can use the following Python script to test the middleware:
@@ -159,7 +162,7 @@ def test_caddy_mib():
         status_code, response_body = send_request()
         log(f"Request {i + 1}: Status Code = {status_code}")
 
-        if status_code == 403:
+        if status_code == 429:  # Custom status code for banned IPs
             log("IP has been banned.")
             log(f"Ban Response: {response_body.strip()}")
             break
@@ -170,7 +173,7 @@ def test_caddy_mib():
 
     # Send another request to verify the ban has expired
     status_code, response_body = send_request()
-    if status_code != 403:
+    if status_code != 429:
         log("Ban has expired. IP is no longer banned.")
     else:
         log("IP is still banned.")
@@ -185,7 +188,7 @@ if __name__ == "__main__":
 2025/01/11 12:42:43.763 Request 1: Status Code = 404
 2025/01/11 12:42:43.775 Request 2: Status Code = 404
 ...
-2025/01/11 12:42:44.639 Request 101: Status Code = 403
+2025/01/11 12:42:44.639 Request 101: Status Code = 429
 2025/01/11 12:42:44.640 IP has been banned.
 2025/01/11 12:42:44.640 Ban Response: You have been banned due to excessive errors. Please try again later.
 2025/01/11 12:42:44.640 Waiting for ban to expire (120 seconds)...
@@ -217,5 +220,3 @@ This project is licensed under the **AGPL-3.0 License**. See the [LICENSE](LICEN
 
 ## Support
 If you encounter any issues or have questions, please [open an issue](https://github.com/fabriziosalmi/caddy-mib/issues).
-
-
