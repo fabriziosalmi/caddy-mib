@@ -2,6 +2,8 @@
     admin off
     log {
         level debug
+        output stdout
+        format json
     }
 }
 
@@ -9,18 +11,16 @@
     route {
         caddy_mib {
             error_codes 404
-            max_error_count 5
-            ban_duration 10m
+            max_error_count 100
+            ban_duration 1m
             ban_duration_multiplier 2
-            output stdout
             whitelist 192.168.1.10 10.0.0.0/24 2001:db8::1
+            custom_response_header "Powered by Caddy MIB"
         }
         file_server {
-            root /var/www/html
+            root /Users/fab/caddy-mib
         }
     }
-    log {
-        output stdout
-        format json
-    }
+    # This log block is for the file_server, you can adjust it as needed.
+    # The caddy_mib logs will be integrated with the global log settings.
 }
