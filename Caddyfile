@@ -3,7 +3,7 @@
     log {
         level debug
         output stdout
-        format json
+        format console
     }
 }
 
