@@ -15,10 +15,9 @@
             ban_duration 1m
             ban_duration_multiplier 2
             whitelist 192.168.1.10 10.0.0.0/24 2001:db8::1
-            custom_response_header "Powered by Caddy MIB"
         }
         file_server {
-            root /Users/fab/caddy-mib
+            root /var/www/html
         }
     }
     # This log block is for the file_server, you can adjust it as needed.
