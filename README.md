@@ -8,10 +8,11 @@
 ## Features
 - **[Track Specific HTTP Error Codes](#configuration)**: Configure which HTTP error codes (e.g., `404`, `500`) to track.
 - **[Set Error Thresholds](#configuration)**: Define the maximum number of errors allowed per IP before banning.
-- **[Custom Ban Duration](#configuration)**: Specify how long an IP should be banned (e.g., `10m`, `1h`).
+- **[Custom Ban Duration](#configuration)**: Specify how long an IP should be banned (e.g., `1m`, `10m`).
 - **[Dynamic Ban Duration](#configuration)**: Increase ban duration exponentially with repeated offenses.
-- **[Whitelist Trusted IPs](#configuration)**: Exempt specific IPs from banning, even if they trigger errors.
-- **[Dynamic Configuration](#configuration)**: Easily configure the middleware using the Caddyfile.
+- **[Whitelist Trusted IPs](#configuration)**: Exempt specific IPs or CIDR ranges from banning.
+- **[CIDR Range Bans](#configuration)**: Ban entire CIDR ranges instead of individual IPs.
+- **[Custom Ban Response](#configuration)**: Return a custom response body and header for banned IPs.
 - **[Debug Logging](#debugging)**: Detailed logs to track IP bans, error counts, and request statuses.
 - **[Automatic Unbanning](#overview)**: Banned IPs are automatically unbanned after the ban duration expires.
 
@@ -61,23 +62,31 @@ Ensure the `caddy-mib` module is included by checking the version output.
 
 ### Caddyfile Example
 ```Caddyfile
+{
+    admin off
+    log {
+        level debug
+        output stdout
+        format console
+    }
+}
+
 :8080 {
     route {
         caddy_mib {
             error_codes 404           # Error codes to track (e.g., 404, 500)
-            max_error_count 5         # Number of errors allowed before banning
-            ban_duration 10m          # Base duration to ban IPs (e.g., 10m, 1h)
+            max_error_count 100       # Number of errors allowed before banning
+            ban_duration 1m           # Base duration to ban IPs (e.g., 1m, 10m)
             ban_duration_multiplier 2 # Increase ban duration exponentially (e.g., 2x)
-            output stdout             # Log output (stdout or stderr)
-            whitelist 192.168.1.1     # Whitelist specific IPs (comma-separated)
+            whitelist 192.168.1.10 10.0.0.0/24 2001:db8::1 # Whitelist specific IPs or CIDR ranges
+            log_level debug           # Log level for debugging
+            log_request_headers User-Agent X-Forwarded-For # Log specific headers
+            custom_response_header "Blocked by Caddy MIB" # Custom header for banned IPs
+            ban_response_body "You have been banned due to excessive errors. Please try again later." # Custom ban response
         }
         file_server {
-            root /var/www/html        # Serve files from this directory
+            root /var/www/html # Serve files from this directory
         }
-    }
-    log {
-        output stdout
-        format json                  # Log in JSON format
     }
 }
 ```
@@ -87,8 +96,11 @@ Ensure the `caddy-mib` module is included by checking the version output.
 - **`max_error_count`**: Maximum number of errors allowed before banning an IP.
 - **`ban_duration`**: Base duration to ban IPs (supports values like `1m`, `5m`, `1h`).
 - **`ban_duration_multiplier`**: Multiplier to increase ban duration exponentially with repeated offenses (e.g., `2` for 2x increase).
-- **`output`**: Log output stream (`stdout` or `stderr`).
-- **`whitelist`**: List of IPs to exempt from banning (e.g., `192.168.1.1`).
+- **`whitelist`**: List of IPs or CIDR ranges to exempt from banning (e.g., `192.168.1.10 10.0.0.0/24`).
+- **`log_level`**: Log level for debugging (e.g., `debug`, `info`, `error`).
+- **`log_request_headers`**: List of request headers to log (e.g., `User-Agent`, `X-Forwarded-For`).
+- **`custom_response_header`**: Custom header to include in responses for banned IPs.
+- **`ban_response_body`**: Custom response body to return for banned IPs.
 
 ---
 
@@ -96,20 +108,89 @@ Ensure the `caddy-mib` module is included by checking the version output.
 
 ### Example Scenario
 1. A client repeatedly requests a non-existent resource (`/nonexistent-file`), resulting in `404 Not Found` errors.
-2. After 5 such errors, the client's IP is banned for 10 minutes.
-3. If the client continues to generate errors, the ban duration increases exponentially (e.g., 20m, 40m, etc.).
+2. After 100 such errors, the client's IP is banned for 1 minute.
+3. If the client continues to generate errors, the ban duration increases exponentially (e.g., 2m, 4m, etc.).
 4. Whitelisted IPs are never banned, even if they trigger errors.
-5. Subsequent requests from the banned IP return `403 Forbidden` until the ban expires.
+5. Subsequent requests from the banned IP return `403 Forbidden` with the custom ban response until the ban expires.
 
-### Testing
-Run the following command to test the middleware:
-```bash
-for i in {1..7}; do curl -I http://localhost:8080/nonexistent-file; sleep 1; done
+### Testing with Python
+You can use the following Python script to test the middleware:
+
+```python
+import subprocess
+import time
+from datetime import datetime
+
+# Configuration
+URL = "http://localhost:8080/nonexistent"  # Endpoint to trigger 404 errors
+MAX_ERRORS = 100  # Matches max_error_count in Caddyfile
+BAN_DURATION = 120  # Matches ban_duration in Caddyfile (2 minutes)
+
+def send_request():
+    """Send a request using curl and return the HTTP status code and response body."""
+    try:
+        result = subprocess.run(
+            ["curl", "-v", URL],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        # Extract HTTP status code
+        status_code = int(result.stderr.split("HTTP/1.1 ")[1].split()[0])
+        # Extract response body
+        response_body = result.stdout
+        return status_code, response_body
+    except subprocess.CalledProcessError as e:
+        # Handle cases where curl fails (e.g., banned IP)
+        status_code = int(e.stderr.split("HTTP/1.1 ")[1].split()[0])
+        response_body = e.stdout
+        return status_code, response_body
+
+def log(message):
+    """Log a message with a timestamp."""
+    timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S.%f")[:-3]
+    print(f"{timestamp} {message}")
+
+def test_caddy_mib():
+    log("Starting test...")
+
+    # Send requests to trigger errors
+    for i in range(MAX_ERRORS + 10):  # Send a few extra requests to test banning
+        status_code, response_body = send_request()
+        log(f"Request {i + 1}: Status Code = {status_code}")
+
+        if status_code == 403:
+            log("IP has been banned.")
+            log(f"Ban Response: {response_body.strip()}")
+            break
+
+    # Wait for the ban to expire
+    log(f"Waiting for ban to expire ({BAN_DURATION} seconds)...")
+    time.sleep(BAN_DURATION)
+
+    # Send another request to verify the ban has expired
+    status_code, response_body = send_request()
+    if status_code != 403:
+        log("Ban has expired. IP is no longer banned.")
+    else:
+        log("IP is still banned.")
+
+if __name__ == "__main__":
+    test_caddy_mib()
 ```
 
 #### Expected Output:
-- The first 5 requests return `404 Not Found`.
-- The 6th and 7th requests return `403 Forbidden` (IP banned).
+```
+2025/01/11 12:42:43.733 Starting test...
+2025/01/11 12:42:43.763 Request 1: Status Code = 404
+2025/01/11 12:42:43.775 Request 2: Status Code = 404
+...
+2025/01/11 12:42:44.639 Request 101: Status Code = 403
+2025/01/11 12:42:44.640 IP has been banned.
+2025/01/11 12:42:44.640 Ban Response: You have been banned due to excessive errors. Please try again later.
+2025/01/11 12:42:44.640 Waiting for ban to expire (120 seconds)...
+2025/01/11 12:44:44.666 Ban has expired. IP is no longer banned.
+```
 
 ---
 
@@ -122,44 +203,19 @@ tail -f /var/log/caddy/access.log
 ```
 
 #### Example Logs:
-```bash
-INFO	http.handlers.caddy_mib	IP banned	{"ip": "::1", "error_code": 404, "error_count": 5, "max_error_count": 5, "ban_duration": "10m0s", "ban_expires_at": "2025-01-09T16:21:45.435Z", "path": "/nonexistent-file"}
-INFO	http.handlers.caddy_mib	IP is currently banned	{"ip": "::1", "path": "/nonexistent-file", "ban_expires_at": "2025-01-09T16:21:45.435Z"}
-INFO	http.handlers.caddy_mib	IP is whitelisted, skipping middleware	{"ip": "192.168.1.1", "path": "/nonexistent-file"}
 ```
-
----
-
-# 🌐 Combining Caddy Modules for Enhanced Security
-
-Did you know you can combine **caddy-waf**, **caddy-mib**, and **caddy-mlf** to create a robust multi-layered security solution for your web applications? By chaining these modules, you can leverage their unique features to provide comprehensive protection against web attacks, abusive behavior, and suspicious traffic patterns.
-
-## 🔗 Chain Overview
-
-By chaining these modules, you can set up a flow where each layer contributes to filtering, banning, and analyzing traffic for maximum security:
-
-| Module       | Role in the Chain                                                                                           | Repository Link                                   |
-|--------------|------------------------------------------------------------------------------------------------------------|--------------------------------------------------|
-| **caddy-waf** | Acts as the first gate, inspecting and filtering malicious requests based on anomaly scores, rate limits, and blacklists. | [GitHub: caddy-waf](https://github.com/fabriziosalmi/caddy-waf) |
-| **caddy-mib** | Handles IP banning for repeated errors, such as 404 or 500, to prevent brute force or abusive access attempts. | [GitHub: caddy-mib](https://github.com/fabriziosalmi/caddy-mib) |
-| **caddy-mlf** | Provides an additional layer of protection by analyzing request attributes and marking/blocking suspicious traffic based on anomaly thresholds. | [GitHub: caddy-mlf](https://github.com/fabriziosalmi/caddy-mlf) |
-
----
-
-## 🔧 Example Configuration
-
-Here’s an example configuration to chain the modules:
-
-### Flow:
-1. **caddy-waf**: Listens on `localhost:8080` and forwards requests to **caddy-mib**.
-2. **caddy-mib**: Listens on `localhost:8081` and forwards requests to **caddy-mlf**.
-3. **caddy-mlf**: Listens on `localhost:8082` and returns a `200 OK` response for legitimate requests or forwards requests to your **origin applications**.
+2025/01/11 11:42:44.621 INFO http.handlers.caddy_mib IP banned {"client_ip": "::1", "error_code": 404, "ban_expires": "2025/01/11 11:44:44.630"}
+2025/01/11 11:44:44.665 INFO http.handlers.caddy_mib cleaned up expired ban {"client_ip": "::1"}
+```
 
 ---
 
 ## License
 This project is licensed under the **AGPL-3.0 License**. See the [LICENSE](LICENSE) file for details.
 
+---
 
 ## Support
 If you encounter any issues or have questions, please [open an issue](https://github.com/fabriziosalmi/caddy-mib/issues).
+
+
