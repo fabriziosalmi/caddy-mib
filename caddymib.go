@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,8 +28,9 @@ type Middleware struct {
 	MaxErrorCount         int            `json:"max_error_count,omitempty"`
 	BanDuration           caddy.Duration `json:"ban_duration,omitempty"`
 	BanDurationMultiplier float64        `json:"ban_duration_multiplier,omitempty"`
-	Output                string         `json:"output,omitempty"`
 	Whitelist             []string       `json:"whitelist,omitempty"`
+	CustomResponseHeader  string         `json:"custom_response_header,omitempty"`
+	LogRequestHeaders     []string       `json:"log_request_headers,omitempty"` // New field to specify headers to log
 
 	logger          *zap.Logger
 	errorCounts     map[string]int
@@ -86,6 +88,8 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 		zap.Int("max_error_count", m.MaxErrorCount),
 		zap.Duration("ban_duration", time.Duration(m.BanDuration)),
 		zap.Strings("whitelist", m.Whitelist),
+		zap.String("custom_response_header", m.CustomResponseHeader),
+		zap.Strings("log_request_headers", m.LogRequestHeaders), // Log configured request headers
 	)
 
 	go m.cleanupExpiredBans()
@@ -110,6 +114,7 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 		m.logger.Error("failed to parse client IP",
 			zap.Error(err),
 			zap.String("remote_addr", r.RemoteAddr),
+			zap.String("request_path", r.URL.Path),
 		)
 		return next.ServeHTTP(w, r)
 	}
@@ -120,6 +125,8 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 			m.logger.Debug("client IP is whitelisted",
 				zap.String("client_ip", clientIP),
 				zap.String("request_path", r.URL.Path),
+				zap.String("method", r.Method),
+				zap.String("user_agent", r.Header.Get("User-Agent")),
 			)
 			return next.ServeHTTP(w, r)
 		}
@@ -135,6 +142,8 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 				zap.String("client_ip", clientIP),
 				zap.String("request_path", r.URL.Path),
 				zap.Time("ban_expires", banTime),
+				zap.String("method", r.Method),
+				zap.String("user_agent", r.Header.Get("User-Agent")),
 			)
 			w.WriteHeader(http.StatusForbidden)
 			return nil
@@ -143,6 +152,8 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 			zap.String("client_ip", clientIP),
 			zap.String("request_path", r.URL.Path),
 			zap.Time("previous_ban_expiration", banTime),
+			zap.String("method", r.Method),
+			zap.String("user_agent", r.Header.Get("User-Agent")),
 		)
 		m.mu.Lock()
 		delete(m.bannedIPs, clientIP)
@@ -154,6 +165,8 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 		m.logger.Debug("no error codes specified; skipping middleware",
 			zap.String("client_ip", clientIP),
 			zap.String("request_path", r.URL.Path),
+			zap.String("method", r.Method),
+			zap.String("user_agent", r.Header.Get("User-Agent")),
 		)
 		return next.ServeHTTP(w, r)
 	}
@@ -165,6 +178,8 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 			zap.Error(err),
 			zap.String("client_ip", clientIP),
 			zap.String("request_path", r.URL.Path),
+			zap.String("method", r.Method),
+			zap.String("user_agent", r.Header.Get("User-Agent")),
 		)
 		statusCode := extractStatusCodeFromError(err)
 		if statusCode == 0 {
@@ -174,8 +189,10 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 			zap.Int("status_code", statusCode),
 			zap.String("client_ip", clientIP),
 			zap.String("request_path", r.URL.Path),
+			zap.String("method", r.Method),
+			zap.String("user_agent", r.Header.Get("User-Agent")),
 		)
-		m.trackErrorStatus(clientIP, statusCode, r.URL.Path, w)
+		m.trackErrorStatus(clientIP, statusCode, r.URL.Path, r)
 		return err
 	}
 
@@ -184,45 +201,63 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 		zap.Int("status_code", statusCode),
 		zap.String("client_ip", clientIP),
 		zap.String("request_path", r.URL.Path),
+		zap.String("method", r.Method),
+		zap.String("user_agent", r.Header.Get("User-Agent")),
 	)
-	m.trackErrorStatus(clientIP, statusCode, r.URL.Path, w)
+	m.trackErrorStatus(clientIP, statusCode, r.URL.Path, r)
+
+	// Add the custom header if configured
+	if m.CustomResponseHeader != "" {
+		w.Header().Set("X-Custom-MIB-Info", m.CustomResponseHeader)
+	}
+
 	return nil
 }
 
-func (m *Middleware) trackErrorStatus(clientIP string, code int, path string, w http.ResponseWriter) {
+func (m *Middleware) trackErrorStatus(clientIP string, code int, path string, r *http.Request) {
+	commonFields := []zap.Field{
+		zap.String("client_ip", clientIP),
+		zap.Int("error_code", code),
+		zap.String("request_path", path),
+		zap.String("method", r.Method),
+		zap.String("user_agent", r.Header.Get("User-Agent")),
+	}
+
 	for _, errCode := range m.ErrorCodes {
 		if code == errCode {
 			m.mu.Lock()
 			countBefore := m.errorCounts[clientIP]
-			m.logger.Debug("tracking error",
-				zap.String("client_ip", clientIP),
-				zap.Int("error_code", code),
+			m.logger.Debug("tracking error", append(commonFields,
 				zap.Int("current_error_count", countBefore),
 				zap.Int("max_error_count", m.MaxErrorCount),
-			)
+			)...)
 			m.errorCounts[clientIP] = countBefore + 1
 			countNow := m.errorCounts[clientIP]
-			m.logger.Debug("error count incremented",
-				zap.String("client_ip", clientIP),
-				zap.Int("error_code", code),
+			m.logger.Debug("error count incremented", append(commonFields,
 				zap.Int("new_error_count", countNow),
 				zap.Int("max_error_count", m.MaxErrorCount),
-			)
+			)...)
 			if countNow >= m.MaxErrorCount {
 				offenses := countNow - m.MaxErrorCount + 1
 				banDuration := time.Duration(m.BanDuration) * time.Duration(math.Pow(m.BanDurationMultiplier, float64(offenses)))
 				expiration := time.Now().Add(banDuration)
 				m.bannedIPs[clientIP] = expiration
-				m.logger.Info("IP banned",
-					zap.String("client_ip", clientIP),
-					zap.Int("error_code", code),
+				logFields := append(commonFields,
 					zap.Int("error_count", countNow),
 					zap.Int("max_error_count", m.MaxErrorCount),
 					zap.Duration("ban_duration", banDuration),
 					zap.Time("ban_expires", expiration),
-					zap.String("request_path", path),
 				)
-				w.WriteHeader(http.StatusForbidden)
+
+				// Add configured request headers to the log
+				for _, headerName := range m.LogRequestHeaders {
+					if value := r.Header.Get(headerName); value != "" {
+						logFields = append(logFields, zap.String(strings.ToLower(headerName), value))
+					}
+				}
+
+				m.logger.Info("IP banned", logFields...)
+				// No need to write header here, it's done in ServeHTTP
 			}
 			m.mu.Unlock()
 			break
@@ -250,11 +285,11 @@ func (m *Middleware) cleanupExpiredBans() {
 		now := time.Now()
 		for ip, banTime := range m.bannedIPs {
 			if now.After(banTime) {
-				delete(m.bannedIPs, ip)
-				delete(m.errorCounts, ip)
 				m.logger.Info("cleaned up expired ban",
 					zap.String("client_ip", ip),
 				)
+				delete(m.bannedIPs, ip)
+				delete(m.errorCounts, ip)
 			}
 		}
 		m.mu.Unlock()
@@ -317,11 +352,18 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				}
 				m.Whitelist = whitelist
 
-			case "output":
+			case "custom_response_header":
 				if !d.NextArg() {
 					return d.ArgErr()
 				}
-				m.Output = d.Val()
+				m.CustomResponseHeader = d.Val()
+
+			case "log_request_headers": // New Caddyfile option
+				var headers []string
+				for d.NextArg() {
+					headers = append(headers, d.Val())
+				}
+				m.LogRequestHeaders = headers
 
 			default:
 				return d.Errf("unrecognized option: %s", d.Val())
