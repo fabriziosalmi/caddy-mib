@@ -1,67 +1,60 @@
-import requests
-from rich.console import Console
-from rich.table import Table
-from rich.progress import track
-from rich.box import SIMPLE_HEAVY
+import subprocess
+import time
+from datetime import datetime
 
-# Initialize rich console
-console = Console()
+# Configuration
+URL = "http://localhost:8080/nonexistent"  # Endpoint to trigger 404 errors
+MAX_ERRORS = 100  # Matches max_error_count in Caddyfile
+BAN_DURATION = 120  # Matches ban_duration in Caddyfile (2 minutes)
 
-# Test configuration
-url = "http://localhost:8080/notexistent"
-expected_statuses = [404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 404, 403]
-
-# Results storage
-results = []
-
-console.print("\n[bold blue]Starting HTTP Tests...[/bold blue]\n")
-
-for i in track(range(101), description="Sending requests...", transient=True):
+def send_request():
+    """Send a request using curl and return the HTTP status code and response body."""
     try:
-        response = requests.get(url, timeout=5)  # Added timeout to avoid potential hangs
-        actual_status = response.status_code
-        expected_status = expected_statuses[i]
-        
-        if actual_status == expected_status:
-            status = "[green]PASS[/green]"
-        else:
-            status = "[red]FAIL[/red]"
+        result = subprocess.run(
+            ["curl", "-v", URL],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        # Extract HTTP status code
+        status_code = int(result.stderr.split("HTTP/1.1 ")[1].split()[0])
+        # Extract response body
+        response_body = result.stdout
+        return status_code, response_body
+    except subprocess.CalledProcessError as e:
+        # Handle cases where curl fails (e.g., banned IP)
+        status_code = int(e.stderr.split("HTTP/1.1 ")[1].split()[0])
+        response_body = e.stdout
+        return status_code, response_body
 
-        results.append({
-            "Attempt": i + 1,
-            "Expected": expected_status,
-            "Received": actual_status,
-            "Status": status
-        })
-    except requests.RequestException as e:
-        console.print(f"[red]Error during request {i + 1}:[/red] {e}")
-        results.append({
-            "Attempt": i + 1,
-            "Expected": expected_statuses[i],
-            "Received": "Error",
-            "Status": "[red]FAIL[/red]"
-        })
+def log(message):
+    """Log a message with a timestamp."""
+    timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S.%f")[:-3]
+    print(f"{timestamp} {message}")
 
-# Display results in a table
-console.print("\n[bold blue]Test Results[/bold blue]\n")
-table = Table(title="HTTP Test Results", box=SIMPLE_HEAVY)
-table.add_column("Attempt", justify="center")
-table.add_column("Expected Status", justify="center")
-table.add_column("Received Status", justify="center")
-table.add_column("Status", justify="center")
+def test_caddy_mib():
+    log("Starting test...")
 
-for result in results:
-    table.add_row(str(result["Attempt"]), 
-                  str(result["Expected"]), 
-                  str(result["Received"]), 
-                  result["Status"])
+    # Send requests to trigger errors
+    for i in range(MAX_ERRORS + 10):  # Send a few extra requests to test banning
+        status_code, response_body = send_request()
+        log(f"Request {i + 1}: Status Code = {status_code}")
 
-console.print(table)
+        if status_code == 403:
+            log("IP has been banned.")
+            log(f"Ban Response: {response_body.strip()}")
+            break
 
-# Final summary
-passes = len([r for r in results if r["Status"] == "[green]PASS[/green]"])
-console.print(f"\n[bold yellow]Summary:[/bold yellow] {passes}/101 tests passed.")
-if passes == 101:
-    console.print("[bold green]All tests passed successfully![/bold green]")
-else:
-    console.print("[bold red]Some tests failed. Please review the results.[/bold red]")
+    # Wait for the ban to expire
+    log(f"Waiting for ban to expire ({BAN_DURATION} seconds)...")
+    time.sleep(BAN_DURATION)
+
+    # Send another request to verify the ban has expired
+    status_code, response_body = send_request()
+    if status_code != 403:
+        log("Ban has expired. IP is no longer banned.")
+    else:
+        log("IP is still banned.")
+
+if __name__ == "__main__":
+    test_caddy_mib()
