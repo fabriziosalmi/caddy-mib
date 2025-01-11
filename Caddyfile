@@ -10,19 +10,33 @@
 :8080 {
     route {
         caddy_mib {
-            error_codes 404                     # Error codes to track (e.g., 404, 500)
-            max_error_count 100                 # Number of errors allowed before banning
-            ban_duration 1m                     # Base duration to ban IPs (e.g., 1m, 10m)
-            ban_duration_multiplier 2           # Increase ban duration exponentially (e.g., 2x)
-            whitelist 192.168.1.10 10.0.0.0/24 2001:db8::1 # Whitelist specific IPs or CIDR ranges
-            log_level debug                     # Log level for debugging
-            log_request_headers User-Agent X-Forwarded-For # Log specific headers
-            custom_response_header "Blocked by Caddy MIB" # Custom header for banned IPs
-            ban_response_body "You have been banned due to excessive errors. Please try again later." # Custom ban response
-            ban_status_code 429                 # Status code for banned IPs (403 or 429)
+            error_codes 404 500 401      # Error codes to track
+            max_error_count 10           # Global error threshold (reduced for faster testing)
+            ban_duration 5s             # Global ban duration (reduced to 10 seconds)
+            ban_duration_multiplier 1    # Global ban duration multiplier
+            whitelist 192.168.1.10       # Whitelisted IPs
+            log_level debug              # Log level for debugging
+            ban_response_body "You have been banned due to excessive errors. Please try again later."
+            ban_status_code 429          # Custom status code for banned IPs
+
+            # Per-path configuration for /login
+            per_path /login {
+                error_codes 404          # Error codes to track for /login
+                max_error_count 5        # Error threshold for /login (reduced for faster testing)
+                ban_duration 10s         # Ban duration for /login (reduced to 15 seconds)
+                ban_duration_multiplier 1
+            }
+
+            # Per-path configuration for /api
+            per_path /api {
+                error_codes 404 500      # Error codes to track for /api
+                max_error_count 8        # Error threshold for /api (reduced for faster testing)
+                ban_duration 15s         # Ban duration for /api (reduced to 20 seconds)
+                ban_duration_multiplier 1
+            }
         }
         file_server {
-            root /Users/fab/caddy-mib           # Serve files from this directory
+            root /var/www/html           # Serve files from this directory
         }
     }
 }
