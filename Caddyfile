@@ -15,11 +15,13 @@
             ban_duration 1m
             ban_duration_multiplier 2
             whitelist 192.168.1.10 10.0.0.0/24 2001:db8::1
+            log_level debug
+            log_request_headers User-Agent X-Forwarded-For
+            custom_response_header "Blocked by Caddy MIB"
+            ban_response_body "You have been banned due to excessive errors. Please try again later."
         }
         file_server {
-            root /var/www/html
+            root /Users/fab/caddy-mib
         }
     }
-    # This log block is for the file_server, you can adjust it as needed.
-    # The caddy_mib logs will be integrated with the global log settings.
 }
