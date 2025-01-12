@@ -140,8 +140,7 @@ Ensure the `caddy-mib` module is included by checking the version output.
 ## Debugging
 
 ### Testing with Python
-You can use the following Python script to test the middleware: `python3 test.py`
-```
+You can use the [test.py](https://github.com/fabriziosalmi/caddy-mib/blob/main/test.py) script to evaluate your setup:
 
 #### Expected Output:
 ```
