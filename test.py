@@ -2,15 +2,16 @@ import subprocess
 import time
 from datetime import datetime, timedelta
 from colorama import Fore, Style, init
+import argparse
 
 # Initialize colorama
 init(autoreset=True)
 
-# Configuration
+# Configuration - can be overridden by command-line arguments
 BASE_URL = "http://localhost:8080"
-NONEXISTENT_URL = f"{BASE_URL}/nonexistent"  # Endpoint to trigger 404 errors
-LOGIN_URL = f"{BASE_URL}/login"             # Endpoint to trigger 404/429 errors
-API_URL = f"{BASE_URL}/api"                 # Endpoint to trigger 404/500 errors
+NONEXISTENT_URL_PATH = "/nonexistent"
+LOGIN_URL_PATH = "/login"
+API_URL_PATH = "/api"
 
 # Global settings
 GLOBAL_MAX_ERRORS = 10  # Matches max_error_count in Caddyfile
@@ -27,11 +28,14 @@ def log(message, **kwargs):
     timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S.%f")[:-3]
     print(f"{timestamp} {message}", **kwargs)
 
-def send_request(url, expected_status=None):
+def send_request(url, expected_status=None, user_agent=None):
     """Send a request using curl and return the HTTP status code and response body."""
+    curl_command = ["curl", "-v", url]
+    if user_agent:
+        curl_command.extend(["-H", f"User-Agent: {user_agent}"])
     try:
         result = subprocess.run(
-            ["curl", "-v", url],
+            curl_command,
             capture_output=True,
             text=True,
             check=True,
@@ -108,7 +112,7 @@ def test_global_ban():
     # Send requests to trigger errors
     for i in range(GLOBAL_MAX_ERRORS + 2):  # Send a few extra requests to test banning
         expected_status = 429 if i >= GLOBAL_MAX_ERRORS else 404
-        status_code, response_body, colored_status = send_request(NONEXISTENT_URL, expected_status=expected_status)
+        status_code, response_body, colored_status = send_request(f"{BASE_URL}{NONEXISTENT_URL_PATH}", expected_status=expected_status)
         log(f"Request {i + 1}: Status Code = {colored_status}")
 
         if status_code == 429:  # Custom status code for banned IPs
@@ -149,7 +153,7 @@ def test_global_ban():
         time.sleep(GLOBAL_BAN_DURATION)
 
     # Send another request to verify the ban has expired
-    status_code, response_body, colored_status = send_request(NONEXISTENT_URL, expected_status=404)
+    status_code, response_body, colored_status = send_request(f"{BASE_URL}{NONEXISTENT_URL_PATH}", expected_status=404)
     log(f"Verifying ban expiration: Status Code = {colored_status}")
     if status_code != 429:
         log(f"{Fore.GREEN}Global ban has expired. IP is no longer banned.{Style.RESET_ALL}")
@@ -168,7 +172,7 @@ def test_login_ban():
     # Send requests to trigger errors
     for i in range(LOGIN_MAX_ERRORS + 2):  # Send a few extra requests to test banning
         expected_status = 429 if i >= LOGIN_MAX_ERRORS else 404  # Expecting 404 before ban
-        status_code, response_body, colored_status = send_request(LOGIN_URL, expected_status=expected_status)
+        status_code, response_body, colored_status = send_request(f"{BASE_URL}{LOGIN_URL_PATH}", expected_status=expected_status)
         log(f"Request {i + 1}: Status Code = {colored_status}")
 
         if status_code == 429:  # Custom status code for banned IPs
@@ -209,7 +213,7 @@ def test_login_ban():
         time.sleep(LOGIN_BAN_DURATION)
 
     # Send another request to verify the ban has expired
-    status_code, response_body, colored_status = send_request(LOGIN_URL, expected_status=404) # Expecting 404 after ban expires
+    status_code, response_body, colored_status = send_request(f"{BASE_URL}{LOGIN_URL_PATH}", expected_status=404) # Expecting 404 after ban expires
     log(f"Verifying ban expiration: Status Code = {colored_status}")
     if status_code != 429:
         log(f"{Fore.GREEN}/login ban has expired. IP is no longer banned.{Style.RESET_ALL}")
@@ -228,7 +232,7 @@ def test_api_ban():
     # Send requests to trigger errors
     for i in range(API_MAX_ERRORS + 2):  # Send a few extra requests to test banning
         expected_status = 429 if i >= API_MAX_ERRORS else 404  # Or 500
-        status_code, response_body, colored_status = send_request(API_URL, expected_status=expected_status)
+        status_code, response_body, colored_status = send_request(f"{BASE_URL}{API_URL_PATH}", expected_status=expected_status)
         log(f"Request {i + 1}: Status Code = {colored_status}")
 
         if status_code == 429:  # Custom status code for banned IPs
@@ -269,7 +273,7 @@ def test_api_ban():
         time.sleep(API_BAN_DURATION)
 
     # Send another request to verify the ban has expired
-    status_code, response_body, colored_status = send_request(API_URL, expected_status=404) # Or 500
+    status_code, response_body, colored_status = send_request(f"{BASE_URL}{API_URL_PATH}", expected_status=404) # Or 500
     log(f"Verifying ban expiration: Status Code = {colored_status}")
     if status_code != 429:
         log(f"{Fore.GREEN}/api ban has expired. IP is no longer banned.{Style.RESET_ALL}")
@@ -281,12 +285,27 @@ def test_api_ban():
 def test_specific_404():
     """Test that the nonexistent URL returns a 404 status."""
     log("Starting test_specific_404...")
-    status_code, _, colored_status = send_request(NONEXISTENT_URL, expected_status=404)
+    status_code, _, colored_status = send_request(f"{BASE_URL}{NONEXISTENT_URL_PATH}", expected_status=404)
     if status_code == 404:
         log(f"{Fore.GREEN}Received expected 404 for nonexistent URL. Status Code = {colored_status}{Style.RESET_ALL}")
         return True
     else:
         log(f"{Fore.RED}test_specific_404 failed: Expected 404, but got {colored_status}{Style.RESET_ALL}")
+        return False
+
+def test_root_response_with_fab():
+    """Test that the root URL returns an acceptable status code with 'fab' user-agent."""
+    log("Starting test_root_response_with_fab...")
+    status_code, _, colored_status = send_request(BASE_URL, user_agent="fab")
+    is_acceptable = 200 <= status_code < 400 or status_code == 404
+    is_forbidden = status_code in [401, 402, 403]
+    is_too_high = status_code > 404
+
+    if is_acceptable and not is_forbidden and not is_too_high:
+        log(f"{Fore.GREEN}Received acceptable status code ({colored_status}) for root URL with 'fab' user-agent.{Style.RESET_ALL}")
+        return True
+    else:
+        log(f"{Fore.RED}test_root_response_with_fab failed: Received unacceptable status code {colored_status} for root URL with 'fab' user-agent.{Style.RESET_ALL}")
         return False
 
 def print_summary(test_name, success):
@@ -297,12 +316,23 @@ def print_summary(test_name, success):
         print(f"{Fore.RED}[FAIL]{Style.RESET_ALL} {test_name}")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Test script for rate limiting and banning.")
+    parser.add_argument("--base-url", dest="base_url", default=BASE_URL,
+                        help=f"Base URL of the service (default: {BASE_URL})")
+    args = parser.parse_args()
+
+    BASE_URL = args.base_url
+    NONEXISTENT_URL = f"{BASE_URL}{NONEXISTENT_URL_PATH}"
+    LOGIN_URL = f"{BASE_URL}{LOGIN_URL_PATH}"
+    API_URL = f"{BASE_URL}{API_URL_PATH}"
+
     # Run all tests and collect results
     results = {
         "Global Ban Test": test_global_ban(),
         "Login Ban Test": test_login_ban(),
         "API Ban Test": test_api_ban(),
         "Specific 404 Test": test_specific_404(),
+        "Root Response with fab Test": test_root_response_with_fab(),
     }
 
     # Print summary
@@ -346,3 +376,5 @@ if __name__ == "__main__":
             print(f"{Fore.YELLOW}- The per-path ban for '/api' might not be triggering or expiring correctly.{Style.RESET_ALL}")
         if test_details.get("Specific 404 Test") == "FAIL":
             print(f"{Fore.YELLOW}- The server is not returning the expected 404 status for nonexistent URLs, which could indicate a routing issue.{Style.RESET_ALL}")
+        if test_details.get("Root Response with fab Test") == "FAIL":
+            print(f"{Fore.YELLOW}- The server is not returning an acceptable status code (2xx, 3xx, or 400, excluding 401, 402, 403, and above 404) for the root URL with the 'fab' user-agent.{Style.RESET_ALL}")
