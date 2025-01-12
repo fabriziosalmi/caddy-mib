@@ -145,64 +145,65 @@ You can use the [test.py](https://github.com/fabriziosalmi/caddy-mib/blob/main/t
 #### Expected Output:
 ```
 caddy-mib % python3 test.py
-2025/01/12 01:33:19.136 Starting global ban test...
-2025/01/12 01:33:19.158 Request 1: Status Code = 404
-2025/01/12 01:33:19.166 Request 2: Status Code = 404
-2025/01/12 01:33:19.172 Request 3: Status Code = 404
-2025/01/12 01:33:19.178 Request 4: Status Code = 404
-2025/01/12 01:33:19.184 Request 5: Status Code = 404
-2025/01/12 01:33:19.190 Request 6: Status Code = 404
-2025/01/12 01:33:19.196 Request 7: Status Code = 404
-2025/01/12 01:33:19.201 Request 8: Status Code = 404
-2025/01/12 01:33:19.207 Request 9: Status Code = 404
-2025/01/12 01:33:19.213 Request 10: Status Code = 404
-2025/01/12 01:33:19.219 Request 11: Status Code = 429
-2025/01/12 01:33:19.219 IP has been banned globally.
-2025/01/12 01:33:19.219 Ban Response: You have been banned due to excessive errors. Please try again later.
-2025/01/12 01:33:19.219 Expected ban to expire at: 2025/01/12 01:33:29
+2025/01/12 01:45:08.286 Starting global ban test...
+2025/01/12 01:45:08.297 Request 1: Status Code = 404
+2025/01/12 01:45:08.303 Request 2: Status Code = 404
+2025/01/12 01:45:08.308 Request 3: Status Code = 404
+2025/01/12 01:45:08.314 Request 4: Status Code = 404
+2025/01/12 01:45:08.319 Request 5: Status Code = 404
+2025/01/12 01:45:08.325 Request 6: Status Code = 404
+2025/01/12 01:45:08.330 Request 7: Status Code = 404
+2025/01/12 01:45:08.336 Request 8: Status Code = 404
+2025/01/12 01:45:08.342 Request 9: Status Code = 429
+2025/01/12 01:45:08.342 IP has been banned globally.
+2025/01/12 01:45:08.342 Ban Response: You have been banned due to excessive errors. Please try again later.
+2025/01/12 01:45:08.342 Expected ban to expire at: 2025/01/12 01:45:18
 Global ban expires in: 00:00
-2025/01/12 01:33:29.264 Continuing with ban expiration verification...
-2025/01/12 01:33:29.282 Verifying ban expiration: Status Code = 404
-2025/01/12 01:33:29.282 Global ban has expired. IP is no longer banned.
-2025/01/12 01:33:29.282 Starting /login ban test...
-2025/01/12 01:33:29.293 Request 1: Status Code = 404
-2025/01/12 01:33:29.302 Request 2: Status Code = 404
-2025/01/12 01:33:29.310 Request 3: Status Code = 404
-2025/01/12 01:33:29.316 Request 4: Status Code = 404
-2025/01/12 01:33:29.323 Request 5: Status Code = 404
-2025/01/12 01:33:29.329 Request 6: Status Code = 429
-2025/01/12 01:33:29.329 IP has been banned for /login.
-2025/01/12 01:33:29.329 Ban Response: You have been banned due to excessive errors. Please try again later.
-2025/01/12 01:33:29.329 Expected /login ban to expire at: 2025/01/12 01:33:44
+2025/01/12 01:45:18.388 Continuing with ban expiration verification...
+2025/01/12 01:45:18.410 Verifying ban expiration: Status Code = 404
+2025/01/12 01:45:18.410 Global ban has expired. IP is no longer banned.
+2025/01/12 01:45:18.410 Starting /login ban test...
+2025/01/12 01:45:18.428 Request 1: Status Code = 404
+2025/01/12 01:45:18.437 Request 2: Status Code = 404
+2025/01/12 01:45:18.444 Request 3: Status Code = 404
+2025/01/12 01:45:18.451 Request 4: Status Code = 404
+2025/01/12 01:45:18.457 Request 5: Status Code = 404
+2025/01/12 01:45:18.464 Request 6: Status Code = 429
+2025/01/12 01:45:18.464 IP has been banned for /login.
+2025/01/12 01:45:18.464 Ban Response: You have been banned due to excessive errors. Please try again later.
+2025/01/12 01:45:18.464 Expected /login ban to expire at: 2025/01/12 01:45:33
 /login ban expires in: 00:00
-2025/01/12 01:33:44.387 Continuing with ban expiration verification...
-2025/01/12 01:33:44.406 Verifying ban expiration: Status Code = 404
-2025/01/12 01:33:44.406 /login ban has expired. IP is no longer banned.
-2025/01/12 01:33:44.406 Starting /api ban test...
-2025/01/12 01:33:44.417 Request 1: Status Code = 404
-2025/01/12 01:33:44.425 Request 2: Status Code = 404
-2025/01/12 01:33:44.432 Request 3: Status Code = 404
-2025/01/12 01:33:44.439 Request 4: Status Code = 404
-2025/01/12 01:33:44.445 Request 5: Status Code = 404
-2025/01/12 01:33:44.451 Request 6: Status Code = 404
-2025/01/12 01:33:44.457 Request 7: Status Code = 404
-2025/01/12 01:33:44.463 Request 8: Status Code = 404
-2025/01/12 01:33:44.469 Request 9: Status Code = 429
-2025/01/12 01:33:44.469 IP has been banned for /api.
-2025/01/12 01:33:44.469 Ban Response: You have been banned due to excessive errors. Please try again later.
-2025/01/12 01:33:44.469 Expected /api ban to expire at: 2025/01/12 01:34:04
+2025/01/12 01:45:33.526 Continuing with ban expiration verification...
+2025/01/12 01:45:33.546 Verifying ban expiration: Status Code = 404
+2025/01/12 01:45:33.546 /login ban has expired. IP is no longer banned.
+2025/01/12 01:45:33.546 Starting /api ban test...
+2025/01/12 01:45:33.558 Request 1: Status Code = 404
+2025/01/12 01:45:33.567 Request 2: Status Code = 404
+2025/01/12 01:45:33.575 Request 3: Status Code = 404
+2025/01/12 01:45:33.582 Request 4: Status Code = 404
+2025/01/12 01:45:33.589 Request 5: Status Code = 404
+2025/01/12 01:45:33.597 Request 6: Status Code = 404
+2025/01/12 01:45:33.606 Request 7: Status Code = 404
+2025/01/12 01:45:33.612 Request 8: Status Code = 404
+2025/01/12 01:45:33.618 Request 9: Status Code = 429
+2025/01/12 01:45:33.618 IP has been banned for /api.
+2025/01/12 01:45:33.618 Ban Response: You have been banned due to excessive errors. Please try again later.
+2025/01/12 01:45:33.618 Expected /api ban to expire at: 2025/01/12 01:45:53
 /api ban expires in: 00:00
-2025/01/12 01:34:04.558 Continuing with ban expiration verification...
-2025/01/12 01:34:04.579 Verifying ban expiration: Status Code = 404
-2025/01/12 01:34:04.579 /api ban has expired. IP is no longer banned.
-2025/01/12 01:34:04.579 Starting test_specific_404...
-2025/01/12 01:34:04.593 Received expected 404 for nonexistent URL. Status Code = 404
+2025/01/12 01:45:53.698 Continuing with ban expiration verification...
+2025/01/12 01:45:53.724 Verifying ban expiration: Status Code = 404
+2025/01/12 01:45:53.724 /api ban has expired. IP is no longer banned.
+2025/01/12 01:45:53.724 Starting test_specific_404...
+2025/01/12 01:45:53.735 Received expected 404 for nonexistent URL. Status Code = 404
+2025/01/12 01:45:53.735 Starting test_root_response_with_fab...
+2025/01/12 01:45:53.744 Received acceptable status code (404) for root URL with 'fab' user-agent.
 
 === Test Summary ===
 [PASS] Global Ban Test
 [PASS] Login Ban Test
 [PASS] API Ban Test
 [PASS] Specific 404 Test
+[PASS] Root Response with fab Test
 
 === Overall Test Result ===
 All tests passed! (100.00%)
@@ -212,6 +213,7 @@ Global Ban Test: PASS
 Login Ban Test: PASS
 API Ban Test: PASS
 Specific 404 Test: PASS
+Root Response with fab Test: PASS
 
 === Insights ===
 All tests passed, indicating that the rate limiting and banning mechanisms are functioning as expected.
