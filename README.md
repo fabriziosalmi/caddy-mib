@@ -143,7 +143,8 @@ Ensure the `caddy-mib` module is included by checking the version output.
 You can use the [test.py](https://github.com/fabriziosalmi/caddy-mib/blob/main/test.py) script to evaluate your setup:
 
 #### Expected Output:
-```
+
+```bash
 caddy-mib % python3 test.py
 2025/01/12 01:45:08.286 Starting global ban test...
 2025/01/12 01:45:08.297 Request 1: Status Code = 404
