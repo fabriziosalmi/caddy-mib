@@ -85,7 +85,7 @@ jobs:
             exit 1
           fi
           
-          if ! grep -q "MIB middleware provisioned" caddy_output.log; then
+          if ! grep -q "caddy mib middleware provisioned" caddy_output.log; then
             echo "ADF provisioning log not found"
             cat caddy_output.log
             exit 1
