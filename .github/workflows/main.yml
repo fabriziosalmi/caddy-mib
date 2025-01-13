@@ -1,0 +1,100 @@
+name: Build and test Caddy with MIB
+
+permissions:
+  contents: read
+  pull-requests: write
+  
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build and Test Caddy MIB
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y wget git build-essential
+
+      - name: Install Go 1.23.4
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23.4'
+
+      - name: Validate Go Installation
+        run: |
+          go version
+          if ! go version | grep -q "go1.23.4"; then
+            echo "Go installation failed or incorrect version"
+            exit 1
+          fi
+
+      - name: Clone caddy-adf Repository
+        run: |
+          git clone https://github.com/fabriziosalmi/caddy-mib.git
+          cd caddy-mib
+
+      - name: Validate Repository Cloning
+        run: |
+          if [ ! -d "caddy-mib" ]; then
+            echo "Repository cloning failed"
+            exit 1
+          fi
+
+      - name: Install Go Dependencies
+        run: |
+          cd caddy-mib
+          go mod tidy
+          go get -v github.com/fabriziosalmi/caddy-mib github.com/caddyserver/caddy/v2 
+
+      - name: Build Caddy with caddy-mib
+        run: |
+          cd caddy-mib
+          go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+          xcaddy build --with github.com/fabriziosalmi/caddy-mib=./
+
+      - name: Validate Build
+        run: |
+          cd caddy-mib
+          if [ ! -f "caddy" ]; then
+            echo "Caddy build failed"
+            exit 1
+          fi
+          
+      - name: Test Caddy Run and Validate MIB Provisioning
+        run: |
+          cd caddy-mib
+          chmod +x caddy
+          ./caddy run > caddy_output.log 2>&1 &
+          sleep 5
+          
+          if ! pgrep -f "caddy run"; then
+            echo "Caddy run failed"
+            cat caddy_output.log
+            exit 1
+          fi
+          
+          if ! grep -q "MIB middleware provisioned" caddy_output.log; then
+            echo "ADF provisioning log not found"
+            cat caddy_output.log
+            exit 1
+          fi
+          
+          echo "Caddy build and run successful with MIB middleware provisioned"
+
+      - name: Clean Up
+        if: always()
+        run: |
+          pkill -f "caddy run" || true
+          echo "Cleaned up running Caddy instances"
