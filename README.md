@@ -3,6 +3,8 @@
 ## Overview
 **Caddy MIB (Middleware IP Ban)** is a custom Caddy HTTP middleware designed to track client IPs generating repetitive errors (such as `404` or `500`) and temporarily ban them after exceeding a specified threshold. This middleware helps mitigate brute force attacks, excessive requests for non-existent resources, or other abusive behavior by blocking IPs that breach the configured error limits.
 
+[![Build and test Caddy with MIB](https://github.com/fabriziosalmi/caddy-mib/actions/workflows/main.yml/badge.svg)](https://github.com/fabriziosalmi/caddy-mib/actions/workflows/main.yml)
+
 ---
 
 ## Features
