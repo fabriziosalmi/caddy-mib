@@ -14,7 +14,7 @@
             max_error_count 10           # Global error threshold (reduced for faster testing)
             ban_duration 5s             # Global ban duration (reduced to 10 seconds)
             ban_duration_multiplier 1    # Global ban duration multiplier
-            whitelist 192.168.1.10       # Whitelisted IPs
+            whitelist 127.0.0.1 ::1       # Whitelisted IPs
             log_level debug              # Log level for debugging
             ban_response_body "You have been banned due to excessive errors. Please try again later."
             ban_status_code 429          # Custom status code for banned IPs
@@ -35,8 +35,9 @@
                 ban_duration_multiplier 1
             }
         }
-        file_server {
-            root /var/www/html           # Serve files from this directory
+        # All other requests, respond with "Hello World"
+        handle {
+            respond "Hello world!" 200
         }
     }
 }

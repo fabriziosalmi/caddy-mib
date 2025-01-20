@@ -5,6 +5,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,7 +99,10 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 		if err != nil {
 			ip := net.ParseIP(cidr)
 			if ip == nil {
-				return fmt.Errorf("invalid IP or CIDR in whitelist: %s", cidr)
+				m.logger.Warn("invalid IP or CIDR in whitelist, skipping",
+					zap.String("ip_or_cidr", cidr),
+				)
+				continue
 			}
 			var mask net.IPMask
 			if ip.To4() != nil {
@@ -385,14 +389,23 @@ func (m *Middleware) trackErrorsForPath(clientIP string, code int, path string, 
 }
 
 // extractStatusCodeFromError extracts the HTTP status code from the error message.
+// extractStatusCodeFromError extracts the HTTP status code from the error message.
 func extractStatusCodeFromError(err error) int {
 	if err == nil {
 		return 0
 	}
-	errMsg := err.Error()
-	if len(errMsg) >= 6 && errMsg[len(errMsg)-3:] == "404" {
-		return 404
+
+	// Regex to match HTTP status codes in the error message
+	re := regexp.MustCompile(`HTTP (\d{3})`)
+	matches := re.FindStringSubmatch(err.Error())
+	if len(matches) > 1 {
+		code, err := strconv.Atoi(matches[1])
+		if err != nil {
+			return 0
+		}
+		return code
 	}
+
 	return 0
 }
 
