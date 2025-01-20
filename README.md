@@ -15,7 +15,7 @@
 - **[Whitelist Trusted IPs](#configuration)**: Exempt specific IPs or CIDR ranges from banning.
 - **[Per-Path Configuration](#configuration)**: Define custom error thresholds and ban durations for specific paths.
 - **[Custom Ban Response](#configuration)**: Return a custom response body and header for banned IPs.
-- **[Configurable Ban Status Code](#configuration)**: Set a custom HTTP status code for banned IPs (e.g., `403 Forbidden` or `429 Too Many Requests`).
+- **[Configurable Ban Status Code](#configuration)**: Set custom code for banned IPs (e.g., `403 Forbidden` or `429 Too Many Requests`).
 - **[Debugging](#debugging)**: Detailed logs to track IP bans, error counts, and request statuses.
 - **[Automatic Unbanning](#overview)**: Banned IPs are automatically unbanned after the ban duration expires.
 
