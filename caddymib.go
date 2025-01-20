@@ -156,6 +156,15 @@ func (m *Middleware) Validate() error {
 
 // ServeHTTP handles the HTTP request.
 func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	// Add the custom header if configured
+	if m.CustomResponseHeader != "" {
+		headers := strings.Split(m.CustomResponseHeader, ",")
+		for _, header := range headers {
+			w.Header().Add("X-Custom-MIB-Info", strings.TrimSpace(header))
+		}
+	}
+
+	// Rest of the ServeHTTP logic...
 	clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		m.logger.Error("failed to parse client IP",
@@ -250,11 +259,6 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 		zap.String("client_ip", clientIP),
 	)
 	m.trackErrorStatus(clientIP, statusCode, r.URL.Path, r)
-
-	// Add the custom header if configured
-	if m.CustomResponseHeader != "" {
-		w.Header().Set("X-Custom-MIB-Info", m.CustomResponseHeader)
-	}
 
 	return nil
 }
