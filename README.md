@@ -1,149 +1,196 @@
-# Caddy MIB - Caddy Middleware for IP Banning
+# Caddy MIB - Middleware IP Ban for Caddy
 
 ## Overview
-**Caddy MIB (Middleware IP Ban)** is a custom Caddy HTTP middleware designed to track client IPs generating repetitive errors (such as `404` or `500`) and temporarily ban them after exceeding a specified threshold. This middleware helps mitigate brute force attacks, excessive requests for non-existent resources, or other abusive behavior by blocking IPs that breach the configured error limits.
+**Caddy MIB (Middleware IP Ban)** is a powerful and flexible custom Caddy HTTP middleware designed to safeguard your web applications by proactively tracking client IP addresses exhibiting repetitive error patterns (e.g., `404 Not Found`, `500 Internal Server Error`). Upon exceeding a configurable error threshold, Caddy MIB temporarily bans the offending IP, effectively mitigating brute-force attacks, preventing abuse of non-existent resources, and limiting other forms of malicious activity. This middleware is an essential tool for any security-conscious web administrator using Caddy.
 
 [![Go](https://github.com/fabriziosalmi/caddy-mib/actions/workflows/go.yml/badge.svg)](https://github.com/fabriziosalmi/caddy-mib/actions/workflows/go.yml) [![CodeQL](https://github.com/fabriziosalmi/caddy-mib/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/fabriziosalmi/caddy-mib/actions/workflows/github-code-scanning/codeql) [![Build and test Caddy with MIB](https://github.com/fabriziosalmi/caddy-mib/actions/workflows/main.yml/badge.svg)](https://github.com/fabriziosalmi/caddy-mib/actions/workflows/main.yml)
 
----
-
-## Features
-- **[Track Specific HTTP Error Codes](#configuration)**: Configure which HTTP error codes (e.g., `404`, `500`) to track.
-- **[Set Error Thresholds](#configuration)**: Define the maximum number of errors allowed per IP before banning.
-- **[Custom Ban Duration](#configuration)**: Specify how long an IP should be banned (e.g., `5s`, `10s`).
-- **[Dynamic Ban Duration](#configuration)**: Increase ban duration exponentially with repeated offenses.
-- **[Whitelist Trusted IPs](#configuration)**: Exempt specific IPs or CIDR ranges from banning.
-- **[Per-Path Configuration](#configuration)**: Define custom error thresholds and ban durations for specific paths.
-- **[Custom Ban Response](#configuration)**: Return a custom response body and header for banned IPs.
-- **[Configurable Ban Status Code](#configuration)**: Set custom code for banned IPs (e.g., `403 Forbidden` or `429 Too Many Requests`).
-- **[Debugging](#debugging)**: Detailed logs to track IP bans, error counts, and request statuses.
-- **[Automatic Unbanning](#overview)**: Banned IPs are automatically unbanned after the ban duration expires.
-
----
+## Key Features
+*   **Error Code Tracking**: Monitor specific HTTP error codes (e.g., 404, 500).
+*   **Configurable Error Limits**: Set max errors per IP before banning.
+*   **Flexible Ban Times**: Use human-readable formats (e.g., 5s, 10m, 1h).
+*   **Exponential Ban Increase**: Ban duration grows for repeat offenders.
+*   **Trusted IP Whitelisting**: Exclude specific IPs or CIDRs from bans.
+*   **Path-Specific Settings**: Tailor limits and bans per URL path.
+*   **Custom Ban Messages**: Set custom response bodies and headers.
+*   **Adjustable Ban Status Codes**: Choose between 403 or 429 for banned IPs.
+*   **Detailed Logging**: Track IP, error code, ban times, and request data.
+*   **Automatic Ban Removal**: Bans are automatically lifted upon expiration.
 
 ## Requirements
-- **Go 1.20 or later**
-- **Caddy v2.9.0 or later**
+- **Go 1.20 or later** - For building the custom Caddy module.
+- **Caddy v2.9.0 or later** - The Caddy web server and its plugin framework.
 
 ---
 
-## Internal Links
-- **[Overview](#overview)**: Learn about the purpose and functionality of Caddy MIB.
-- **[Features](#features)**: Explore the key features of the middleware.
-- **[Installation](#installation)**: Step-by-step guide to install and build the middleware.
-- **[Configuration](#configuration)**: Configure the middleware using the Caddyfile.
-- **[Usage](#usage)**: Example scenario and testing instructions.
-- **[Debugging](#debugging)**: Understand how to debug and interpret logs.
-- **[License](#license)**: View the project's license.
-- **[Contributions](#contributions)**: Contribute to the project.
-- **[Support](#support)**: Get help and report issues.
+## Table of Contents
+- **[Overview](#overview)**: The core purpose of Caddy MIB.
+- **[Key Features](#key-features)**: A detailed breakdown of the middleware's functionalities.
+- **[Requirements](#requirements)**: Software dependencies for installation.
+- **[Installation](#installation)**: Step-by-step instructions for building and including the module.
+- **[Configuration](#configuration)**: Options and examples for customizing Caddy MIB.
+- **[Usage](#usage)**: Common use cases and scenarios.
+- **[Debugging](#debugging)**: Tips and strategies for troubleshooting issues.
+- **[License](#license)**: Legal information regarding the usage and distribution of the software.
+- **[Contributions](#contributions)**: How to participate in the development of Caddy MIB.
+- **[Support](#support)**: Ways to seek assistance and report issues.
 
 ---
 
 ## Installation
 
 ### 1. Clone the Repository
+First, clone the Caddy MIB repository to your local machine:
 ```bash
 git clone https://github.com/fabriziosalmi/caddy-mib.git
 cd caddy-mib
 ```
 
-### 2. Build the Caddy Binary with MIB Module
+### 2. Build Caddy with the MIB Module
+Use `xcaddy` to compile Caddy with the custom MIB module:
 ```bash
 xcaddy build --with github.com/fabriziosalmi/caddy-mib=./
 ```
 
-### 3. Verify the Build
+### 3. Verify the Installation
+Check the installed Caddy version to confirm the presence of `caddy-mib`:
 ```bash
 ./caddy version
 ```
-Ensure the `caddy-mib` module is included by checking the version output.
+
+You should see `caddy-mib` listed among the modules.
 
 ---
 
 ## Configuration
 
 ### Caddyfile Example
-```Caddyfile
+Here's a comprehensive example showcasing a range of options:
+```caddyfile
 {
-    admin off
+    admin off # Disable the admin endpoint for production
     log {
-        level debug
-        output stdout
-        format console
+        level debug  # Set log level for detailed debugging
+        output stdout  # Output logs to the console
+        format console # Use human-readable log format
     }
 }
 
-:8080 {
+:8080 { # Listen on port 8080
     route {
         caddy_mib {
-            error_codes 404 500 401      # Error codes to track
-            max_error_count 10           # Global error threshold (reduced for faster testing)
-            ban_duration 5s             # Global ban duration (reduced to 10 seconds)
-            ban_duration_multiplier 1    # Global ban duration multiplier
-            whitelist 127.0.0.1 ::1       # Whitelisted IPs
-            log_level debug              # Log level for debugging
-            ban_response_body "You have been banned due to excessive errors. Please try again later."
-            ban_status_code 429          # Custom status code for banned IPs
+            error_codes 404 500 401  # Track 404, 500, and 401 errors
+            max_error_count 10 # Allow up to 10 global errors
+            ban_duration 5s # Base ban duration of 5 seconds
+            ban_duration_multiplier 1.5 # Increase ban duration for repeat offenders
+            whitelist 127.0.0.1 ::1 192.168.1.0/24 # Whitelist local IPs and network
+			log_request_headers  User-Agent X-Custom-Header  # Log specified request headers
+            log_level debug  # Debug log level for this middleware
+            ban_response_body "You have been temporarily blocked due to excessive errors. Please try again later." # Custom ban response message
+            ban_status_code 429 # Use the 429 Too Many Requests status code
 
-            # Per-path configuration for /login
+             cidr_bans 10.0.0.0/8  # CIDR to ban
+			 # Custom response header example
+            custom_response_header  "This is a custom message,Another message"
+
+
             per_path /login {
-                error_codes 404          # Error codes to track for /login
-                max_error_count 5        # Error threshold for /login (reduced for faster testing)
-                ban_duration 10s         # Ban duration for /login (reduced to 15 seconds)
-                ban_duration_multiplier 1
+                error_codes 404  # Track only 404 errors on /login
+                max_error_count 5  # Only allow 5 errors before banning
+                ban_duration 10s # Ban duration of 10 seconds
+                ban_duration_multiplier 2 # Exponential increase in /login ban duration
             }
 
-            # Per-path configuration for /api
             per_path /api {
-                error_codes 404 500      # Error codes to track for /api
-                max_error_count 8        # Error threshold for /api (reduced for faster testing)
-                ban_duration 15s         # Ban duration for /api (reduced to 20 seconds)
-                ban_duration_multiplier 1
+                error_codes 404 500  # Track 404 and 500 errors on /api
+                max_error_count 8  # Allow 8 errors before banning
+                ban_duration 15s  # 15-second ban duration
+                ban_duration_multiplier 1  # No exponential increase in /api ban duration
             }
         }
-        # All other requests, respond with "Hello World"
+
         handle {
-            respond "Hello world!" 200
+            respond "Hello world!" 404  # Fallback response for unhandled routes
         }
     }
 }
 ```
 
 ### Directive Options
-- **`error_codes`**: List of space-separated HTTP error codes to track (e.g., `404 500 401`).
-- **`max_error_count`**: Maximum number of errors allowed before banning an IP.
-- **`ban_duration`**: Base duration to ban IPs (supports values like `5s`, `10s`, `1m`).
-- **`ban_duration_multiplier`**: Multiplier to increase ban duration exponentially with repeated offenses (e.g., `1` for no increase).
-- **`whitelist`**: List of IPs or CIDR ranges to exempt from banning (e.g., `192.168.1.10`).
-- **`log_level`**: Log level for debugging (e.g., `debug`, `info`, `error`).
-- **`ban_response_body`**: Custom response body to return for banned IPs.
-- **`ban_status_code`**: Custom HTTP status code to return for banned IPs (e.g., `429`).
+
+-   **`error_codes`** _(Required)_:
+    *   Specifies a space-separated list of HTTP error codes to be tracked for rate limiting.
+    *   Example: `error_codes 404 500 401`
+-   **`max_error_count`** _(Required)_:
+    *   The maximum number of errors allowed from a single IP before initiating a ban.
+    *   Example: `max_error_count 10`
+-   **`ban_duration`** _(Required)_:
+    *   The initial duration for which an IP address will be banned.
+    *   Example: `ban_duration 5s` (5 seconds), `ban_duration 10m` (10 minutes), `ban_duration 1h` (1 hour)
+-   **`ban_duration_multiplier`** _(Optional)_:
+    *   A floating-point number to exponentially increase the ban duration upon each subsequent offense.
+    *   Example: `ban_duration_multiplier 1.5`
+    *   Defaults to `1.0` (no multiplier).
+-  **`whitelist`** _(Optional)_:
+    *   A space-separated list of IP addresses or CIDR ranges to exclude from being banned.
+    *   Example: `whitelist 127.0.0.1 ::1 192.168.1.0/24`
+-   **`log_level`** _(Optional)_:
+    *   Sets the log level for the middleware.
+    *   Supported values: `debug`, `info`, `warn`, `error`.
+    *   Example: `log_level debug`
+    *   Defaults to Caddy's global log level.
+-   **`ban_response_body`** _(Optional)_:
+    *   Custom message to display to blocked clients.
+    *   Example: `ban_response_body "You have been blocked due to excessive errors."`
+    *   If not set, an empty response body will be returned.
+-  **`ban_status_code`** _(Optional)_:
+    *   The HTTP status code returned for banned requests. Must be either 403 (Forbidden) or 429 (Too Many Requests).
+    *   Example: `ban_status_code 429`
+    *    Defaults to `403` (Forbidden).
+-    **`cidr_bans`** _(Optional)_:
+	*	A space-separated list of CIDR ranges to ban
+	*	Example `cidr_bans 10.0.0.0/8 172.16.0.0/12`
+- **`custom_response_header`** _(Optional)_:
+	*    A comma-separated list of custom headers to add to the response, each header will have key as `X-Custom-MIB-Info`.
+	*	Example `custom_response_header "Custom header, Another header"`
+- **`log_request_headers`** _(Optional)_:
+    *   A space-separated list of request headers to log when an IP is banned. Useful for debugging.
+    *   Example: `log_request_headers User-Agent X-Forwarded-For`
 
 #### Per-Path Configuration
-- **`per_path`**: Define custom error thresholds and ban durations for specific paths.
-  - **`error_codes`**: Error codes to track for the specific path.
-  - **`max_error_count`**: Maximum number of errors allowed for the specific path.
-  - **`ban_duration`**: Ban duration for the specific path.
-  - **`ban_duration_multiplier`**: Multiplier for ban duration on repeated offenses.
+
+-   **`per_path <path>`** _(Optional)_:
+    *   Configures per-path settings, taking precedence over global configurations.
+    *   Reuses all the same options as global ones: `error_codes`, `max_error_count`, `ban_duration` and `ban_duration_multiplier`
+    *   Each path block must be defined as a Caddyfile block.
 
 ---
 
 ## Usage
 
 ### Example Scenario
-1. A client repeatedly requests a non-existent resource (`/nonexistent-file`), resulting in `404 Not Found` errors.
-2. After 10 such errors, the client's IP is banned for 5 seconds.
-3. If the client continues to generate errors, the ban duration remains the same (no multiplier).
-4. Whitelisted IPs (e.g., `192.168.1.10`) are never banned, even if they trigger errors.
-5. Subsequent requests from the banned IP return the configured status code (e.g., `429 Too Many Requests`) with the custom ban response until the ban expires.
+
+1.  A client makes multiple requests to a URL that does not exist on your server, generating `404 Not Found` responses.
+2.  The client exceeds the global `max_error_count`, resulting in a global ban.
+3.  The client's IP receives a `429 Too Many Requests` response with the custom `ban_response_body`.
+4.  The client attempts to access the `/login` endpoint, which is configured with specific error limits and ban duration that are different than the global ones.
+5. The client is banned after triggering multiple 404, resulting in a separate ban and `429` response.
+
+### Best Practices
+
+*   **Start with a reasonable `max_error_count`**: This should be high enough to avoid banning legitimate users and bots while still protecting against malicious attacks.
+*   **Use a moderate `ban_duration`**: Start with a short ban duration and gradually increase it if needed.
+*   **Utilize `ban_duration_multiplier` wisely**: Be careful when using exponential multipliers, as they can quickly lead to very long ban times.
+*   **Whitelist trusted networks**: It's good practice to whitelist internal networks to prevent self-blocking.
+*   **Set proper log levels**: Setting `log_level` to `debug` can help during testing, while `info` or `warn` are more suitable for production use.
+*	**Use `cidr_bans`**: Use `cidr_bans` in combination with the `whitelist` for more precise configuration.
 
 ---
 
 ## Debugging
 
 ### Testing with Python
-You can use the [test.py](https://github.com/fabriziosalmi/caddy-mib/blob/main/test.py) script to evaluate your setup:
+The included [test.py](https://github.com/fabriziosalmi/caddy-mib/blob/main/test.py) script allows you to test the module’s functionality.
 
 #### Expected Output:
 
@@ -223,28 +270,36 @@ Root Response with fab Test: PASS
 All tests passed, indicating that the rate limiting and banning mechanisms are functioning as expected.
 ```
 
----
-
-## Debugging
-
 ### Logs
-Check the Caddy logs for detailed information about IP bans and request statuses:
+Monitor the Caddy logs for insightful debugging information. Tail the Caddy log file:
 ```bash
 tail -f /var/log/caddy/access.log
 ```
 
-#### Example Logs:
+Example log messages:
 ```
 2025/01/11 11:42:44.621 INFO http.handlers.caddy_mib IP banned {"client_ip": "::1", "error_code": 404, "ban_expires": "2025/01/11 11:42:49.630"}
 2025/01/11 11:42:49.665 INFO http.handlers.caddy_mib cleaned up expired ban {"client_ip": "::1"}
 ```
+These log lines provide valuable information on when IPs are banned, which error codes trigger a ban, and when bans expire.
 
 ---
 
 ## License
-This project is licensed under the **AGPL-3.0 License**. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the **AGPL-3.0 License**. Refer to the [LICENSE](LICENSE) file for full details.
+
+---
+
+## Contributions
+We welcome contributions from the community! To contribute:
+
+1.  Fork the repository.
+2.  Create a feature branch.
+3.  Make your changes and add tests.
+4.  Submit a pull request.
 
 ---
 
 ## Support
-If you encounter any issues or have questions, please [open an issue](https://github.com/fabriziosalmi/caddy-mib/issues).
+For issues or questions regarding Caddy MIB, please open a new issue on our [issue tracker](https://github.com/fabriziosalmi/caddy-mib/issues).
+```
