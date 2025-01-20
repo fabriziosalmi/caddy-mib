@@ -79,9 +79,9 @@ Ensure the `caddy-mib` module is included by checking the version output.
         caddy_mib {
             error_codes 404 500 401      # Error codes to track
             max_error_count 10           # Global error threshold (reduced for faster testing)
-            ban_duration 5s              # Global ban duration (reduced to 5 seconds)
+            ban_duration 5s             # Global ban duration (reduced to 10 seconds)
             ban_duration_multiplier 1    # Global ban duration multiplier
-            whitelist 192.168.1.10       # Whitelisted IPs
+            whitelist 127.0.0.1 ::1       # Whitelisted IPs
             log_level debug              # Log level for debugging
             ban_response_body "You have been banned due to excessive errors. Please try again later."
             ban_status_code 429          # Custom status code for banned IPs
@@ -90,7 +90,7 @@ Ensure the `caddy-mib` module is included by checking the version output.
             per_path /login {
                 error_codes 404          # Error codes to track for /login
                 max_error_count 5        # Error threshold for /login (reduced for faster testing)
-                ban_duration 10s         # Ban duration for /login (reduced to 10 seconds)
+                ban_duration 10s         # Ban duration for /login (reduced to 15 seconds)
                 ban_duration_multiplier 1
             }
 
@@ -98,12 +98,13 @@ Ensure the `caddy-mib` module is included by checking the version output.
             per_path /api {
                 error_codes 404 500      # Error codes to track for /api
                 max_error_count 8        # Error threshold for /api (reduced for faster testing)
-                ban_duration 15s         # Ban duration for /api (reduced to 15 seconds)
+                ban_duration 15s         # Ban duration for /api (reduced to 20 seconds)
                 ban_duration_multiplier 1
             }
         }
-        file_server {
-            root /var/www/html           # Serve files from this directory
+        # All other requests, respond with "Hello World"
+        handle {
+            respond "Hello world!" 200
         }
     }
 }
