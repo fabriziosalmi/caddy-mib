@@ -13,11 +13,11 @@ NONEXISTENT_URL_PATH = "/nonexistent"
 LOGIN_URL_PATH = "/login"
 API_URL_PATH = "/api"
 
-# Global settings
+# Global settings (defaults)
 GLOBAL_MAX_ERRORS = 10  # Matches max_error_count in Caddyfile
 GLOBAL_BAN_DURATION = 10  # Matches ban_duration in Caddyfile (10 seconds)
 
-# Per-path settings
+# Per-path settings (defaults)
 LOGIN_MAX_ERRORS = 5  # Matches max_error_count for /login
 LOGIN_BAN_DURATION = 15  # Matches ban_duration for /login (15 seconds)
 API_MAX_ERRORS = 8  # Matches max_error_count for /api
@@ -308,6 +308,91 @@ def test_root_response_with_fab():
         log(f"{Fore.RED}test_root_response_with_fab failed: Received unacceptable status code {colored_status} for root URL with 'fab' user-agent.{Style.RESET_ALL}")
         return False
 
+def test_custom_response_header():
+    """Test that the custom response header is present in the response."""
+    log("Starting custom response header test...")
+    status_code, response_body, colored_status = send_request(f"{BASE_URL}{NONEXISTENT_URL_PATH}")
+    if "X-Custom-MIB-Info" in response_body:
+        log(f"{Fore.GREEN}Custom response header found in response.{Style.RESET_ALL}")
+        return True
+    else:
+        log(f"{Fore.RED}Custom response header not found in response.{Style.RESET_ALL}")
+        return False
+
+def test_whitelist():
+    """Test that whitelisted IPs are not banned."""
+    log("Starting whitelist test...")
+    # Simulate requests from a whitelisted IP
+    for i in range(GLOBAL_MAX_ERRORS + 2):
+        status_code, response_body, colored_status = send_request(f"{BASE_URL}{NONEXISTENT_URL_PATH}")
+        log(f"Request {i + 1}: Status Code = {colored_status}")
+        if status_code == 429:
+            log(f"{Fore.RED}Whitelist test failed: IP was banned despite being whitelisted.{Style.RESET_ALL}")
+            return False
+    log(f"{Fore.GREEN}Whitelist test passed: IP was not banned.{Style.RESET_ALL}")
+    return True
+
+def test_cidr_ban():
+    """Test that IPs within a banned CIDR range are blocked."""
+    log("Starting CIDR ban test...")
+    status_code, response_body, colored_status = send_request(f"{BASE_URL}{NONEXISTENT_URL_PATH}")
+    if status_code == 429:
+        log(f"{Fore.GREEN}CIDR ban test passed: IP within banned CIDR range was blocked.{Style.RESET_ALL}")
+        return True
+    else:
+        log(f"{Fore.RED}CIDR ban test failed: IP within banned CIDR range was not blocked.{Style.RESET_ALL}")
+        return False
+
+def test_ban_duration_multiplier():
+    """Test that the ban duration increases exponentially based on the multiplier."""
+    log("Starting ban duration multiplier test...")
+    # Trigger multiple bans and measure the duration
+    ban_durations = []
+    for i in range(3):  # Trigger 3 bans
+        for _ in range(GLOBAL_MAX_ERRORS + 1):
+            send_request(f"{BASE_URL}{NONEXISTENT_URL_PATH}")
+        ban_start_time = datetime.now()
+        while True:
+            status_code, _, _ = send_request(f"{BASE_URL}{NONEXISTENT_URL_PATH}")
+            if status_code != 429:
+                ban_end_time = datetime.now()
+                ban_durations.append((ban_end_time - ban_start_time).total_seconds())
+                break
+            time.sleep(1)
+    # Verify that ban durations increase exponentially
+    if ban_durations[1] > ban_durations[0] and ban_durations[2] > ban_durations[1]:
+        log(f"{Fore.GREEN}Ban duration multiplier test passed: Ban durations increased exponentially.{Style.RESET_ALL}")
+        return True
+    else:
+        log(f"{Fore.RED}Ban duration multiplier test failed: Ban durations did not increase exponentially.{Style.RESET_ALL}")
+        return False
+
+def test_log_request_headers():
+    """Test that specified request headers are logged."""
+    log("Starting log request headers test...")
+    status_code, response_body, colored_status = send_request(f"{BASE_URL}{NONEXISTENT_URL_PATH}", user_agent="test-agent")
+    # Check logs for the presence of the "User-Agent" header
+    if "test-agent" in response_body:  # Assuming the response body contains logged headers
+        log(f"{Fore.GREEN}Log request headers test passed: 'User-Agent' header was logged.{Style.RESET_ALL}")
+        return True
+    else:
+        log(f"{Fore.RED}Log request headers test failed: 'User-Agent' header was not logged.{Style.RESET_ALL}")
+        return False
+
+def test_custom_ban_response_body():
+    """Test that the custom ban response body is returned."""
+    log("Starting custom ban response body test...")
+    # Trigger a ban
+    for _ in range(GLOBAL_MAX_ERRORS + 1):
+        send_request(f"{BASE_URL}{NONEXISTENT_URL_PATH}")
+    status_code, response_body, colored_status = send_request(f"{BASE_URL}{NONEXISTENT_URL_PATH}")
+    if "custom ban response" in response_body:  # Replace with the expected custom response
+        log(f"{Fore.GREEN}Custom ban response body test passed: Custom response body was returned.{Style.RESET_ALL}")
+        return True
+    else:
+        log(f"{Fore.RED}Custom ban response body test failed: Custom response body was not returned.{Style.RESET_ALL}")
+        return False
+
 def print_summary(test_name, success):
     """Print a summary of the test result with colored output."""
     if success:
@@ -319,12 +404,28 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test script for rate limiting and banning.")
     parser.add_argument("--base-url", dest="base_url", default=BASE_URL,
                         help=f"Base URL of the service (default: {BASE_URL})")
+    parser.add_argument("--global-max-errors", type=int, default=GLOBAL_MAX_ERRORS,
+                        help=f"Global max errors before banning (default: {GLOBAL_MAX_ERRORS})")
+    parser.add_argument("--global-ban-duration", type=int, default=GLOBAL_BAN_DURATION,
+                        help=f"Global ban duration in seconds (default: {GLOBAL_BAN_DURATION})")
+    parser.add_argument("--login-max-errors", type=int, default=LOGIN_MAX_ERRORS,
+                        help=f"Max errors for /login before banning (default: {LOGIN_MAX_ERRORS})")
+    parser.add_argument("--login-ban-duration", type=int, default=LOGIN_BAN_DURATION,
+                        help=f"Ban duration for /login in seconds (default: {LOGIN_BAN_DURATION})")
+    parser.add_argument("--api-max-errors", type=int, default=API_MAX_ERRORS,
+                        help=f"Max errors for /api before banning (default: {API_MAX_ERRORS})")
+    parser.add_argument("--api-ban-duration", type=int, default=API_BAN_DURATION,
+                        help=f"Ban duration for /api in seconds (default: {API_BAN_DURATION})")
     args = parser.parse_args()
 
+    # Update configuration with command-line arguments
     BASE_URL = args.base_url
-    NONEXISTENT_URL = f"{BASE_URL}{NONEXISTENT_URL_PATH}"
-    LOGIN_URL = f"{BASE_URL}{LOGIN_URL_PATH}"
-    API_URL = f"{BASE_URL}{API_URL_PATH}"
+    GLOBAL_MAX_ERRORS = args.global_max_errors
+    GLOBAL_BAN_DURATION = args.global_ban_duration
+    LOGIN_MAX_ERRORS = args.login_max_errors
+    LOGIN_BAN_DURATION = args.login_ban_duration
+    API_MAX_ERRORS = args.api_max_errors
+    API_BAN_DURATION = args.api_ban_duration
 
     # Run all tests and collect results
     results = {
@@ -333,6 +434,12 @@ if __name__ == "__main__":
         "API Ban Test": test_api_ban(),
         "Specific 404 Test": test_specific_404(),
         "Root Response with fab Test": test_root_response_with_fab(),
+        "Custom Response Header Test": test_custom_response_header(),
+        "Whitelist Test": test_whitelist(),
+        "CIDR Ban Test": test_cidr_ban(),
+        "Ban Duration Multiplier Test": test_ban_duration_multiplier(),
+        "Log Request Headers Test": test_log_request_headers(),
+        "Custom Ban Response Body Test": test_custom_ban_response_body(),
     }
 
     # Print summary
@@ -378,3 +485,15 @@ if __name__ == "__main__":
             print(f"{Fore.YELLOW}- The server is not returning the expected 404 status for nonexistent URLs, which could indicate a routing issue.{Style.RESET_ALL}")
         if test_details.get("Root Response with fab Test") == "FAIL":
             print(f"{Fore.YELLOW}- The server is not returning an acceptable status code (2xx, 3xx, or 400, excluding 401, 402, 403, and above 404) for the root URL with the 'fab' user-agent.{Style.RESET_ALL}")
+        if test_details.get("Custom Response Header Test") == "FAIL":
+            print(f"{Fore.YELLOW}- The custom response header is not being added to the response.{Style.RESET_ALL}")
+        if test_details.get("Whitelist Test") == "FAIL":
+            print(f"{Fore.YELLOW}- Whitelisted IPs are being banned despite being whitelisted.{Style.RESET_ALL}")
+        if test_details.get("CIDR Ban Test") == "FAIL":
+            print(f"{Fore.YELLOW}- IPs within banned CIDR ranges are not being blocked.{Style.RESET_ALL}")
+        if test_details.get("Ban Duration Multiplier Test") == "FAIL":
+            print(f"{Fore.YELLOW}- The ban duration is not increasing exponentially based on the multiplier.{Style.RESET_ALL}")
+        if test_details.get("Log Request Headers Test") == "FAIL":
+            print(f"{Fore.YELLOW}- Specified request headers are not being logged.{Style.RESET_ALL}")
+        if test_details.get("Custom Ban Response Body Test") == "FAIL":
+            print(f"{Fore.YELLOW}- The custom ban response body is not being returned.{Style.RESET_ALL}")

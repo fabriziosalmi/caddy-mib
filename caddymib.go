@@ -26,20 +26,20 @@ func init() {
 
 // Middleware implements the Caddy MIB middleware.
 type Middleware struct {
-	ErrorCodes            []int          `json:"error_codes,omitempty"`
-	MaxErrorCount         int            `json:"max_error_count,omitempty"`
-	BanDuration           caddy.Duration `json:"ban_duration,omitempty"`
-	BanDurationMultiplier float64        `json:"ban_duration_multiplier,omitempty"`
-	Whitelist             []string       `json:"whitelist,omitempty"`
-	CustomResponseHeader  string         `json:"custom_response_header,omitempty"`
-	LogRequestHeaders     []string       `json:"log_request_headers,omitempty"`
-	LogLevel              string         `json:"log_level,omitempty"`
-	CIDRBans              []string       `json:"cidr_bans,omitempty"`
-	BanResponseBody       string         `json:"ban_response_body,omitempty"`
-	BanStatusCode         int            `json:"ban_status_code,omitempty"`
+	ErrorCodes            []int          `json:"error_codes,omitempty"`             // HTTP status codes to track as errors
+	MaxErrorCount         int            `json:"max_error_count,omitempty"`         // Maximum allowed errors before banning
+	BanDuration           caddy.Duration `json:"ban_duration,omitempty"`            // Base duration for banning
+	BanDurationMultiplier float64        `json:"ban_duration_multiplier,omitempty"` // Multiplier for ban duration after each offense
+	Whitelist             []string       `json:"whitelist,omitempty"`               // List of IPs or CIDRs to whitelist
+	CustomResponseHeader  string         `json:"custom_response_header,omitempty"`  // Custom header to add to responses
+	LogRequestHeaders     []string       `json:"log_request_headers,omitempty"`     // Request headers to log
+	LogLevel              string         `json:"log_level,omitempty"`               // Log level for the middleware
+	CIDRBans              []string       `json:"cidr_bans,omitempty"`               // List of CIDRs to ban
+	BanResponseBody       string         `json:"ban_response_body,omitempty"`       // Response body for banned requests
+	BanStatusCode         int            `json:"ban_status_code,omitempty"`         // HTTP status code for banned requests
 
 	// Per-path configuration
-	PerPathConfig map[string]PathConfig `json:"per_path,omitempty"`
+	PerPathConfig map[string]PathConfig `json:"per_path,omitempty"` // Configuration for specific paths
 
 	logger          *zap.Logger
 	errorCounts     sync.Map // Tracks errors per IP and path
@@ -50,10 +50,10 @@ type Middleware struct {
 
 // PathConfig defines per-path configuration.
 type PathConfig struct {
-	ErrorCodes            []int          `json:"error_codes,omitempty"`
-	MaxErrorCount         int            `json:"max_error_count,omitempty"`
-	BanDuration           caddy.Duration `json:"ban_duration,omitempty"`
-	BanDurationMultiplier float64        `json:"ban_duration_multiplier,omitempty"`
+	ErrorCodes            []int          `json:"error_codes,omitempty"`             // HTTP status codes to track as errors for this path
+	MaxErrorCount         int            `json:"max_error_count,omitempty"`         // Maximum allowed errors before banning for this path
+	BanDuration           caddy.Duration `json:"ban_duration,omitempty"`            // Base duration for banning for this path
+	BanDurationMultiplier float64        `json:"ban_duration_multiplier,omitempty"` // Multiplier for ban duration after each offense for this path
 }
 
 // CaddyModule returns the Caddy module information.
@@ -164,7 +164,6 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 		}
 	}
 
-	// Rest of the ServeHTTP logic...
 	clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		m.logger.Error("failed to parse client IP",
@@ -278,6 +277,7 @@ func normalizeIP(ip string) string {
 	return ip
 }
 
+// trackErrorStatus tracks errors for a specific IP and path.
 func (m *Middleware) trackErrorStatus(clientIP string, code int, path string, r *http.Request) {
 	commonFields := []zap.Field{
 		zap.String("client_ip", clientIP),
@@ -286,6 +286,9 @@ func (m *Middleware) trackErrorStatus(clientIP string, code int, path string, r 
 		zap.String("method", r.Method),
 		zap.String("user_agent", r.Header.Get("User-Agent")),
 	}
+
+	// Use a composite key for error counts
+	key := fmt.Sprintf("%s:%s", clientIP, path)
 
 	// Check if the path has a specific configuration
 	pathConfig, hasPathConfig := m.PerPathConfig[path]
@@ -301,15 +304,15 @@ func (m *Middleware) trackErrorStatus(clientIP string, code int, path string, r 
 	for _, errCode := range m.ErrorCodes {
 		if code == errCode {
 			countBefore := 0
-			if val, ok := m.errorCounts.Load(clientIP); ok {
-				countBefore = val.(map[string]int)["global"]
+			if val, ok := m.errorCounts.Load(key); ok {
+				countBefore = val.(int)
 			}
 			m.logger.Debug("tracking error", append(commonFields,
 				zap.Int("current_error_count", countBefore),
 				zap.Int("max_error_count", m.MaxErrorCount),
 			)...)
 			countNow := countBefore + 1
-			m.errorCounts.Store(clientIP, map[string]int{"global": countNow})
+			m.errorCounts.Store(key, countNow)
 			m.logger.Debug("error count incremented", append(commonFields,
 				zap.Int("new_error_count", countNow),
 				zap.Int("max_error_count", m.MaxErrorCount),
@@ -317,6 +320,9 @@ func (m *Middleware) trackErrorStatus(clientIP string, code int, path string, r 
 			if countNow >= m.MaxErrorCount {
 				offenses := countNow - m.MaxErrorCount + 1
 				banDuration := time.Duration(m.BanDuration) * time.Duration(math.Pow(m.BanDurationMultiplier, float64(offenses)))
+				if banDuration > 24*time.Hour { // Cap ban duration at 24 hours
+					banDuration = 24 * time.Hour
+				}
 				expiration := time.Now().Add(banDuration)
 				m.bannedIPs.Store(clientIP, expiration)
 				logFields := append(commonFields,
@@ -329,7 +335,7 @@ func (m *Middleware) trackErrorStatus(clientIP string, code int, path string, r 
 				// Add configured request headers to the log
 				for _, headerName := range m.LogRequestHeaders {
 					if value := r.Header.Get(headerName); value != "" {
-						logFields = append(logFields, zap.String(strings.ToLower(headerName), value))
+						logFields = append(logFields, zap.String(headerName, value))
 					}
 				}
 
@@ -350,18 +356,21 @@ func (m *Middleware) trackErrorsForPath(clientIP string, code int, path string, 
 		zap.String("user_agent", r.Header.Get("User-Agent")),
 	}
 
+	// Use a composite key for error counts
+	key := fmt.Sprintf("%s:%s", clientIP, path)
+
 	for _, errCode := range config.ErrorCodes {
 		if code == errCode {
 			countBefore := 0
-			if val, ok := m.errorCounts.Load(clientIP); ok {
-				countBefore = val.(map[string]int)[path]
+			if val, ok := m.errorCounts.Load(key); ok {
+				countBefore = val.(int)
 			}
 			m.logger.Debug("tracking error for path", append(commonFields,
 				zap.Int("current_error_count", countBefore),
 				zap.Int("max_error_count", config.MaxErrorCount),
 			)...)
 			countNow := countBefore + 1
-			m.errorCounts.Store(clientIP, map[string]int{path: countNow})
+			m.errorCounts.Store(key, countNow)
 			m.logger.Debug("error count incremented for path", append(commonFields,
 				zap.Int("new_error_count", countNow),
 				zap.Int("max_error_count", config.MaxErrorCount),
@@ -369,6 +378,9 @@ func (m *Middleware) trackErrorsForPath(clientIP string, code int, path string, 
 			if countNow >= config.MaxErrorCount {
 				offenses := countNow - config.MaxErrorCount + 1
 				banDuration := time.Duration(config.BanDuration) * time.Duration(math.Pow(config.BanDurationMultiplier, float64(offenses)))
+				if banDuration > 24*time.Hour { // Cap ban duration at 24 hours
+					banDuration = 24 * time.Hour
+				}
 				expiration := time.Now().Add(banDuration)
 				m.bannedIPs.Store(clientIP, expiration)
 				logFields := append(commonFields,
@@ -381,7 +393,7 @@ func (m *Middleware) trackErrorsForPath(clientIP string, code int, path string, 
 				// Add configured request headers to the log
 				for _, headerName := range m.LogRequestHeaders {
 					if value := r.Header.Get(headerName); value != "" {
-						logFields = append(logFields, zap.String(strings.ToLower(headerName), value))
+						logFields = append(logFields, zap.String(headerName, value))
 					}
 				}
 
@@ -392,7 +404,6 @@ func (m *Middleware) trackErrorsForPath(clientIP string, code int, path string, 
 	}
 }
 
-// extractStatusCodeFromError extracts the HTTP status code from the error message.
 // extractStatusCodeFromError extracts the HTTP status code from the error message.
 func extractStatusCodeFromError(err error) int {
 	if err == nil {
