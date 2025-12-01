@@ -10,6 +10,7 @@
 *   **Configurable Error Limits**: Set max errors per IP before banning.
 *   **Flexible Ban Times**: Use human-readable formats (e.g., 5s, 10m, 1h).
 *   **Exponential Ban Increase**: Ban duration grows for repeat offenders.
+*   **Sliding Window Error Tracking**: Reset error counts after a period of inactivity (optional).
 *   **Trusted IP Whitelisting**: Exclude specific IPs or CIDRs from bans.
 *   **Path-Specific Settings**: Tailor limits and bans per URL path.
 *   **Custom Ban Messages**: Set custom response bodies and headers.
@@ -83,6 +84,7 @@ Here's a comprehensive example showcasing a range of options:
             max_error_count 10 # Allow up to 10 global errors
             ban_duration 5s # Base ban duration of 5 seconds
             ban_duration_multiplier 1.5 # Increase ban duration for repeat offenders
+            error_count_timeout 1h # Reset error count after 1 hour of inactivity (optional)
             whitelist 127.0.0.1 ::1 192.168.1.0/24 # Whitelist local IPs and network
 			log_request_headers  User-Agent X-Custom-Header  # Log specified request headers
             log_level debug  # Debug log level for this middleware
@@ -99,6 +101,7 @@ Here's a comprehensive example showcasing a range of options:
                 max_error_count 5  # Only allow 5 errors before banning
                 ban_duration 10s # Ban duration of 10 seconds
                 ban_duration_multiplier 2 # Exponential increase in /login ban duration
+                error_count_timeout 15m # Reset after 15 minutes for /login (optional)
             }
 
             per_path /api {
@@ -106,6 +109,7 @@ Here's a comprehensive example showcasing a range of options:
                 max_error_count 8  # Allow 8 errors before banning
                 ban_duration 15s  # 15-second ban duration
                 ban_duration_multiplier 1  # No exponential increase in /api ban duration
+                error_count_timeout 30m # Reset after 30 minutes for /api (optional)
             }
         }
 
@@ -131,6 +135,12 @@ Here's a comprehensive example showcasing a range of options:
     *   A floating-point number to exponentially increase the ban duration upon each subsequent offense.
     *   Example: `ban_duration_multiplier 1.5`
     *   Defaults to `1.0` (no multiplier).
+-   **`error_count_timeout`** _(Optional)_:
+    *   Time window for counting errors. If the time between errors exceeds this duration, the error count resets to 1 (sliding window behavior).
+    *   Useful for preventing permanent error accumulation and avoiding bans from occasional errors spread over long periods.
+    *   Example: `error_count_timeout 1h` (1 hour), `error_count_timeout 30m` (30 minutes)
+    *   Set to `0` or omit to disable (errors never expire - original behavior).
+    *   Can be overridden per-path.
 -  **`whitelist`** _(Optional)_:
     *   A space-separated list of IP addresses or CIDR ranges to exclude from being banned.
     *   Example: `whitelist 127.0.0.1 ::1 192.168.1.0/24`
@@ -161,8 +171,9 @@ Here's a comprehensive example showcasing a range of options:
 
 -   **`per_path <path>`** _(Optional)_:
     *   Configures per-path settings, taking precedence over global configurations.
-    *   Reuses all the same options as global ones: `error_codes`, `max_error_count`, `ban_duration` and `ban_duration_multiplier`
+    *   Reuses all the same options as global ones: `error_codes`, `max_error_count`, `ban_duration`, `ban_duration_multiplier`, and `error_count_timeout`
     *   Each path block must be defined as a Caddyfile block.
+    *   If `error_count_timeout` is not specified in a per-path config, it inherits the global value.
 
 ---
 
@@ -176,11 +187,40 @@ Here's a comprehensive example showcasing a range of options:
 4.  The client attempts to access the `/login` endpoint, which is configured with specific error limits and ban duration that are different than the global ones.
 5. The client is banned after triggering multiple 404, resulting in a separate ban and `429` response.
 
+### Sliding Window Behavior
+
+When `error_count_timeout` is configured, the middleware implements a sliding window for error tracking:
+
+**Example Configuration:**
+```caddyfile
+caddy_mib {
+    error_codes 404
+    max_error_count 5
+    ban_duration 10m
+    error_count_timeout 1h  # Reset after 1 hour of inactivity
+}
+```
+
+**Behavior:**
+- User hits 3 errors within 10 minutes → count = 3
+- User waits 61 minutes (exceeds 1-hour timeout)
+- User hits 1 more error → count resets to 1 (not banned)
+- User hits 4 more errors quickly → count reaches 5, user is banned
+
+**Without timeout (default):**
+- All errors accumulate indefinitely
+- After ban expires, hitting just 1 more error triggers immediate re-ban
+
+**Use Cases:**
+- **Set timeout**: Protect against concentrated attacks while forgiving occasional errors
+- **No timeout**: Stricter enforcement, useful for zero-tolerance scenarios
+
 ### Best Practices
 
 *   **Start with a reasonable `max_error_count`**: This should be high enough to avoid banning legitimate users and bots while still protecting against malicious attacks.
 *   **Use a moderate `ban_duration`**: Start with a short ban duration and gradually increase it if needed.
 *   **Utilize `ban_duration_multiplier` wisely**: Be careful when using exponential multipliers, as they can quickly lead to very long ban times.
+*   **Configure `error_count_timeout` for most use cases**: A 1-hour timeout is a good starting point to prevent permanent error accumulation while still catching abuse patterns. Omit for zero-tolerance enforcement.
 *   **Whitelist trusted networks**: It's good practice to whitelist internal networks to prevent self-blocking.
 *   **Set proper log levels**: Setting `log_level` to `debug` can help during testing, while `info` or `warn` are more suitable for production use.
 *	**Use `cidr_bans`**: Use `cidr_bans` in combination with the `whitelist` for more precise configuration.
@@ -282,6 +322,29 @@ Example log messages:
 2025/01/11 11:42:49.665 INFO http.handlers.caddy_mib cleaned up expired ban {"client_ip": "::1"}
 ```
 These log lines provide valuable information on when IPs are banned, which error codes trigger a ban, and when bans expire.
+
+---
+
+## Recent Updates
+
+### v1.1.0 (Latest)
+
+**New Features:**
+- **Sliding Window Error Tracking**: Added `error_count_timeout` configuration option
+  - Prevents permanent error accumulation
+  - Resets error counts after a period of inactivity
+  - Configurable globally and per-path
+  - Backwards compatible (disabled by default)
+
+**Bug Fixes:**
+- Fixed error count cleanup when bans expire
+  - Previously: Only attempted to delete error counts using IP as key
+  - Now: Properly deletes all error counts across all paths for banned IPs
+  - Impact: Error counts are now correctly reset after ban expiration
+
+**Testing:**
+- Added 6 comprehensive tests covering new functionality
+- All 16 tests passing with full coverage
 
 ---
 

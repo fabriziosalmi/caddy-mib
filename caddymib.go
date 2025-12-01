@@ -30,6 +30,7 @@ type Middleware struct {
 	MaxErrorCount         int            `json:"max_error_count,omitempty"`         // Maximum allowed errors before banning
 	BanDuration           caddy.Duration `json:"ban_duration,omitempty"`            // Base duration for banning
 	BanDurationMultiplier float64        `json:"ban_duration_multiplier,omitempty"` // Multiplier for ban duration after each offense
+	ErrorCountTimeout     caddy.Duration `json:"error_count_timeout,omitempty"`     // Time window for counting errors (0 = disabled, errors never expire)
 	Whitelist             []string       `json:"whitelist,omitempty"`               // List of IPs or CIDRs to whitelist
 	CustomResponseHeader  string         `json:"custom_response_header,omitempty"`  // Custom header to add to responses
 	LogRequestHeaders     []string       `json:"log_request_headers,omitempty"`     // Request headers to log
@@ -44,6 +45,7 @@ type Middleware struct {
 	logger          *zap.Logger
 	errorCounts     sync.Map // Tracks errors per IP and path
 	bannedIPs       sync.Map // Tracks banned IPs and their expiration times
+	offenseCounts   sync.Map // Tracks number of times each IP has been banned (for multiplier)
 	bannedCIDRs     []*net.IPNet
 	whitelistedNets []*net.IPNet
 }
@@ -54,6 +56,14 @@ type PathConfig struct {
 	MaxErrorCount         int            `json:"max_error_count,omitempty"`         // Maximum allowed errors before banning for this path
 	BanDuration           caddy.Duration `json:"ban_duration,omitempty"`            // Base duration for banning for this path
 	BanDurationMultiplier float64        `json:"ban_duration_multiplier,omitempty"` // Multiplier for ban duration after each offense for this path
+	ErrorCountTimeout     caddy.Duration `json:"error_count_timeout,omitempty"`     // Time window for counting errors (0 = use global setting)
+}
+
+// errorTracker tracks error counts and timing for sliding window behavior.
+type errorTracker struct {
+	Count         int
+	FirstErrorAt  time.Time
+	LastErrorAt   time.Time
 }
 
 // CaddyModule returns the Caddy module information.
@@ -220,7 +230,15 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request, next cadd
 			zap.String("client_ip", clientIP),
 		)
 		m.bannedIPs.Delete(clientIP)
-		m.errorCounts.Delete(clientIP)
+
+		// Delete all error counts for this IP across all paths
+		m.errorCounts.Range(func(countKey, countValue interface{}) bool {
+			countKeyStr := countKey.(string)
+			if strings.HasPrefix(countKeyStr, clientIP+":") {
+				m.errorCounts.Delete(countKey)
+			}
+			return true
+		})
 	}
 
 	// Skip middleware if no error codes are specified
@@ -303,31 +321,68 @@ func (m *Middleware) trackErrorStatus(clientIP string, code int, path string, r 
 	// Use global configuration
 	for _, errCode := range m.ErrorCodes {
 		if code == errCode {
-			countBefore := 0
+			now := time.Now()
+
+			// Load or initialize error tracker
+			var tracker errorTracker
 			if val, ok := m.errorCounts.Load(key); ok {
-				countBefore = val.(int)
+				tracker = val.(errorTracker)
+
+				// Implement sliding window: reset count if timeout has passed
+				if m.ErrorCountTimeout > 0 && now.Sub(tracker.LastErrorAt) > time.Duration(m.ErrorCountTimeout) {
+					m.logger.Debug("error count timeout expired, resetting count",
+						zap.String("client_ip", clientIP),
+						zap.String("path", path),
+						zap.Duration("time_since_last_error", now.Sub(tracker.LastErrorAt)),
+						zap.Duration("timeout", time.Duration(m.ErrorCountTimeout)),
+					)
+					tracker = errorTracker{
+						Count:        1,
+						FirstErrorAt: now,
+						LastErrorAt:  now,
+					}
+				} else {
+					tracker.Count++
+					tracker.LastErrorAt = now
+				}
+			} else {
+				// First error for this IP:path
+				tracker = errorTracker{
+					Count:        1,
+					FirstErrorAt: now,
+					LastErrorAt:  now,
+				}
 			}
-			m.logger.Debug("tracking error", append(commonFields,
-				zap.Int("current_error_count", countBefore),
-				zap.Int("max_error_count", m.MaxErrorCount),
-			)...)
-			countNow := countBefore + 1
-			m.errorCounts.Store(key, countNow)
+
+			m.errorCounts.Store(key, tracker)
 			m.logger.Debug("error count incremented", append(commonFields,
-				zap.Int("new_error_count", countNow),
+				zap.Int("current_error_count", tracker.Count),
 				zap.Int("max_error_count", m.MaxErrorCount),
+				zap.Time("first_error_at", tracker.FirstErrorAt),
+				zap.Time("last_error_at", tracker.LastErrorAt),
 			)...)
-			if countNow >= m.MaxErrorCount {
-				offenses := countNow - m.MaxErrorCount + 1
-				banDuration := time.Duration(m.BanDuration) * time.Duration(math.Pow(m.BanDurationMultiplier, float64(offenses)))
+
+			if tracker.Count >= m.MaxErrorCount {
+				// Increment offense count for this IP (global path)
+				// Use clientIP as key for global offense tracking
+				offenseKey := clientIP
+				offenseCount := 1
+				if val, ok := m.offenseCounts.Load(offenseKey); ok {
+					offenseCount = val.(int) + 1
+				}
+				m.offenseCounts.Store(offenseKey, offenseCount)
+
+				// Calculate ban duration with multiplier based on offense count
+				banDuration := time.Duration(m.BanDuration) * time.Duration(math.Pow(m.BanDurationMultiplier, float64(offenseCount)))
 				if banDuration > 24*time.Hour { // Cap ban duration at 24 hours
 					banDuration = 24 * time.Hour
 				}
 				expiration := time.Now().Add(banDuration)
 				m.bannedIPs.Store(clientIP, expiration)
 				logFields := append(commonFields,
-					zap.Int("error_count", countNow),
+					zap.Int("error_count", tracker.Count),
 					zap.Int("max_error_count", m.MaxErrorCount),
+					zap.Int("offense_count", offenseCount),
 					zap.Duration("ban_duration", banDuration),
 					zap.Time("ban_expires", expiration),
 				)
@@ -361,31 +416,74 @@ func (m *Middleware) trackErrorsForPath(clientIP string, code int, path string, 
 
 	for _, errCode := range config.ErrorCodes {
 		if code == errCode {
-			countBefore := 0
-			if val, ok := m.errorCounts.Load(key); ok {
-				countBefore = val.(int)
+			now := time.Now()
+
+			// Determine which timeout to use (per-path or global)
+			timeout := config.ErrorCountTimeout
+			if timeout == 0 {
+				timeout = m.ErrorCountTimeout
 			}
-			m.logger.Debug("tracking error for path", append(commonFields,
-				zap.Int("current_error_count", countBefore),
-				zap.Int("max_error_count", config.MaxErrorCount),
-			)...)
-			countNow := countBefore + 1
-			m.errorCounts.Store(key, countNow)
+
+			// Load or initialize error tracker
+			var tracker errorTracker
+			if val, ok := m.errorCounts.Load(key); ok {
+				tracker = val.(errorTracker)
+
+				// Implement sliding window: reset count if timeout has passed
+				if timeout > 0 && now.Sub(tracker.LastErrorAt) > time.Duration(timeout) {
+					m.logger.Debug("error count timeout expired for path, resetting count",
+						zap.String("client_ip", clientIP),
+						zap.String("path", path),
+						zap.Duration("time_since_last_error", now.Sub(tracker.LastErrorAt)),
+						zap.Duration("timeout", time.Duration(timeout)),
+					)
+					tracker = errorTracker{
+						Count:        1,
+						FirstErrorAt: now,
+						LastErrorAt:  now,
+					}
+				} else {
+					tracker.Count++
+					tracker.LastErrorAt = now
+				}
+			} else {
+				// First error for this IP:path
+				tracker = errorTracker{
+					Count:        1,
+					FirstErrorAt: now,
+					LastErrorAt:  now,
+				}
+			}
+
+			m.errorCounts.Store(key, tracker)
 			m.logger.Debug("error count incremented for path", append(commonFields,
-				zap.Int("new_error_count", countNow),
+				zap.Int("current_error_count", tracker.Count),
 				zap.Int("max_error_count", config.MaxErrorCount),
+				zap.Time("first_error_at", tracker.FirstErrorAt),
+				zap.Time("last_error_at", tracker.LastErrorAt),
 			)...)
-			if countNow >= config.MaxErrorCount {
-				offenses := countNow - config.MaxErrorCount + 1
-				banDuration := time.Duration(config.BanDuration) * time.Duration(math.Pow(config.BanDurationMultiplier, float64(offenses)))
+
+			if tracker.Count >= config.MaxErrorCount {
+				// Increment offense count for this IP:path combination
+				// Use composite key for per-path offense tracking
+				offenseKey := fmt.Sprintf("%s:%s", clientIP, path)
+				offenseCount := 1
+				if val, ok := m.offenseCounts.Load(offenseKey); ok {
+					offenseCount = val.(int) + 1
+				}
+				m.offenseCounts.Store(offenseKey, offenseCount)
+
+				// Calculate ban duration with multiplier based on offense count
+				banDuration := time.Duration(config.BanDuration) * time.Duration(math.Pow(config.BanDurationMultiplier, float64(offenseCount)))
 				if banDuration > 24*time.Hour { // Cap ban duration at 24 hours
 					banDuration = 24 * time.Hour
 				}
 				expiration := time.Now().Add(banDuration)
 				m.bannedIPs.Store(clientIP, expiration)
 				logFields := append(commonFields,
-					zap.Int("error_count", countNow),
+					zap.Int("error_count", tracker.Count),
 					zap.Int("max_error_count", config.MaxErrorCount),
+					zap.Int("offense_count", offenseCount),
 					zap.Duration("ban_duration", banDuration),
 					zap.Time("ban_expires", expiration),
 				)
@@ -431,11 +529,26 @@ func (m *Middleware) cleanupExpiredBans() {
 		now := time.Now()
 		m.bannedIPs.Range(func(key, value interface{}) bool {
 			if now.After(value.(time.Time)) {
+				clientIP := key.(string)
 				m.logger.Info("cleaned up expired ban",
-					zap.String("client_ip", key.(string)),
+					zap.String("client_ip", clientIP),
 				)
 				m.bannedIPs.Delete(key)
-				m.errorCounts.Delete(key)
+
+				// Delete all error counts for this IP across all paths
+				// errorCounts keys are in format "IP:path"
+				m.errorCounts.Range(func(countKey, countValue interface{}) bool {
+					countKeyStr := countKey.(string)
+					// Check if this error count belongs to the banned IP
+					if strings.HasPrefix(countKeyStr, clientIP+":") {
+						m.errorCounts.Delete(countKey)
+						m.logger.Debug("cleaned up error count for unbanned IP",
+							zap.String("client_ip", clientIP),
+							zap.String("key", countKeyStr),
+						)
+					}
+					return true
+				})
 			}
 			return true
 		})
@@ -490,6 +603,16 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.Errf("invalid ban_duration_multiplier: %s", d.Val())
 				}
 				m.BanDurationMultiplier = multiplier
+
+			case "error_count_timeout":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				dur, err := time.ParseDuration(d.Val())
+				if err != nil {
+					return d.Errf("invalid error_count_timeout: %v", err)
+				}
+				m.ErrorCountTimeout = caddy.Duration(dur)
 
 			case "whitelist":
 				var whitelist []string
@@ -594,6 +717,16 @@ func (m *Middleware) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 							return d.Errf("invalid ban_duration_multiplier: %s", d.Val())
 						}
 						config.BanDurationMultiplier = multiplier
+
+					case "error_count_timeout":
+						if !d.NextArg() {
+							return d.ArgErr()
+						}
+						dur, err := time.ParseDuration(d.Val())
+						if err != nil {
+							return d.Errf("invalid error_count_timeout: %v", err)
+						}
+						config.ErrorCountTimeout = caddy.Duration(dur)
 
 					default:
 						return d.Errf("unrecognized option in per_path block: %s", d.Val())

@@ -12,8 +12,9 @@
         caddy_mib {
             error_codes 404 500 401      # Error codes to track
             max_error_count 10           # Global error threshold (reduced for faster testing)
-            ban_duration 5s             # Global ban duration (reduced to 10 seconds)
-            ban_duration_multiplier 1    # Global ban duration multiplier
+            ban_duration 1s             # Global ban duration (1s for fast testing)
+            error_count_timeout 5s      # Global error count timeout
+            ban_duration_multiplier 2    # Global ban duration multiplier
             # whitelist 127.0.0.1 ::1       # Whitelisted IPs
             log_level debug              # Log level for debugging
             ban_response_body      "You have been banned due to excessive errors. Please try again later."
@@ -23,7 +24,7 @@
             per_path /login {
                 error_codes 404          # Error codes to track for /login
                 max_error_count 5        # Error threshold for /login (reduced for faster testing)
-                ban_duration 10s         # Ban duration for /login (reduced to 15 seconds)
+                ban_duration 2s         # Ban duration for /login (2s for fast testing)
                 ban_duration_multiplier 1
             }
 
@@ -31,7 +32,7 @@
             per_path /api {
                 error_codes 404 500      # Error codes to track for /api
                 max_error_count 8        # Error threshold for /api (reduced for faster testing)
-                ban_duration 15s         # Ban duration for /api (reduced to 20 seconds)
+                ban_duration 3s         # Ban duration for /api (3s for fast testing)
                 ban_duration_multiplier 1
             }
         }

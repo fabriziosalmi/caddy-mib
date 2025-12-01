@@ -352,3 +352,350 @@ func TestMiddleware_ServeHTTP_LogRequestHeaders(t *testing.T) {
 	}
 
 }
+
+// TestMiddleware_ErrorCountTimeout tests the sliding window behavior
+func TestMiddleware_ErrorCountTimeout(t *testing.T) {
+	m := Middleware{
+		ErrorCodes:        []int{404},
+		MaxErrorCount:     3,
+		BanDuration:       caddy.Duration(1 * time.Minute),
+		ErrorCountTimeout: caddy.Duration(2 * time.Second), // 2 second window
+	}
+	ctx := caddy.Context{}
+	m.Provision(ctx)
+
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "192.168.1.1:12345"
+
+	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusNotFound)
+		return nil
+	})
+
+	// Make 2 errors within the timeout window
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		err := m.ServeHTTP(rec, req, next)
+		if err != nil {
+			t.Fatalf("ServeHTTP failed: %v", err)
+		}
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("Expected status code 404, got %d", rec.Code)
+		}
+	}
+
+	// Wait for timeout to expire
+	time.Sleep(3 * time.Second)
+
+	// Make another error - count should reset to 1
+	rec := httptest.NewRecorder()
+	err := m.ServeHTTP(rec, req, next)
+	if err != nil {
+		t.Fatalf("ServeHTTP failed: %v", err)
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected status code 404, got %d", rec.Code)
+	}
+
+	// Verify error count was reset by checking we can make 2 more errors without ban
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		err := m.ServeHTTP(rec, req, next)
+		if err != nil {
+			t.Fatalf("ServeHTTP failed: %v", err)
+		}
+		if i < 1 && rec.Code != http.StatusNotFound {
+			t.Errorf("Expected status code 404, got %d", rec.Code)
+		}
+	}
+
+	// Now we should be banned (3rd error in this window)
+	rec = httptest.NewRecorder()
+	err = m.ServeHTTP(rec, req, next)
+	if err != nil {
+		t.Fatalf("ServeHTTP failed: %v", err)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected status code 403 (banned), got %d", rec.Code)
+	}
+}
+
+// TestMiddleware_ErrorCountResetOnBanExpiry tests that error counts are cleared when ban expires
+func TestMiddleware_ErrorCountResetOnBanExpiry(t *testing.T) {
+	m := Middleware{
+		ErrorCodes:    []int{404},
+		MaxErrorCount: 2,
+		BanDuration:   caddy.Duration(1 * time.Second), // Short ban for testing
+	}
+	ctx := caddy.Context{}
+	m.Provision(ctx)
+
+	req := httptest.NewRequest("GET", "http://example.com/path1", nil)
+	req.RemoteAddr = "192.168.1.1:12345"
+
+	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusNotFound)
+		return nil
+	})
+
+	// Trigger ban with 2 errors
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		err := m.ServeHTTP(rec, req, next)
+		if err != nil {
+			t.Fatalf("ServeHTTP failed: %v", err)
+		}
+	}
+
+	// Verify banned
+	rec := httptest.NewRecorder()
+	err := m.ServeHTTP(rec, req, next)
+	if err != nil {
+		t.Fatalf("ServeHTTP failed: %v", err)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected status code 403 (banned), got %d", rec.Code)
+	}
+
+	// Wait for ban to expire
+	time.Sleep(2 * time.Second)
+
+	// Make request - should unban and clear error counts
+	rec = httptest.NewRecorder()
+	err = m.ServeHTTP(rec, req, next)
+	if err != nil {
+		t.Fatalf("ServeHTTP failed: %v", err)
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected status code 404 (unbanned), got %d", rec.Code)
+	}
+
+	// Verify error count was reset - we should be able to make another error without immediate ban
+	rec = httptest.NewRecorder()
+	err = m.ServeHTTP(rec, req, next)
+	if err != nil {
+		t.Fatalf("ServeHTTP failed: %v", err)
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected status code 404 (not banned yet), got %d", rec.Code)
+	}
+
+	// Wait for cleanup goroutine to process the second ban expiry
+	time.Sleep(2 * time.Second)
+
+	// Verify the error counts for path1 were actually deleted
+	key := "192.168.1.1:/path1"
+	if _, ok := m.errorCounts.Load(key); ok {
+		t.Error("Expected error count to be deleted after ban expired, but it still exists")
+	}
+}
+
+// TestMiddleware_PerPathErrorCountTimeout tests per-path timeout configuration
+func TestMiddleware_PerPathErrorCountTimeout(t *testing.T) {
+	m := Middleware{
+		ErrorCodes:        []int{404},
+		MaxErrorCount:     3,
+		BanDuration:       caddy.Duration(1 * time.Minute),
+		ErrorCountTimeout: caddy.Duration(5 * time.Second), // Global: 5 seconds
+		PerPathConfig: map[string]PathConfig{
+			"/api": {
+				ErrorCodes:            []int{404},
+				MaxErrorCount:         2,
+				BanDuration:           caddy.Duration(1 * time.Minute),
+				BanDurationMultiplier: 1, // Add multiplier
+				ErrorCountTimeout:     caddy.Duration(1 * time.Second), // Override: 1 second for /api
+			},
+		},
+	}
+	ctx := caddy.Context{}
+	m.Provision(ctx)
+
+	// Test /api path with shorter timeout
+	reqAPI := httptest.NewRequest("GET", "http://example.com/api", nil)
+	reqAPI.RemoteAddr = "192.168.1.1:12345"
+
+	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusNotFound)
+		return nil
+	})
+
+	// Make 1 error on /api
+	rec := httptest.NewRecorder()
+	err := m.ServeHTTP(rec, reqAPI, next)
+	if err != nil {
+		t.Fatalf("ServeHTTP failed: %v", err)
+	}
+
+	// Wait for /api timeout to expire (1 second)
+	time.Sleep(2 * time.Second)
+
+	// Make another error - count should be reset to 1 (not banned)
+	rec = httptest.NewRecorder()
+	err = m.ServeHTTP(rec, reqAPI, next)
+	if err != nil {
+		t.Fatalf("ServeHTTP failed: %v", err)
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected status code 404, got %d", rec.Code)
+	}
+
+	// Make one more error - this should be the 2nd error in the new window, triggering ban
+	rec = httptest.NewRecorder()
+	err = m.ServeHTTP(rec, reqAPI, next)
+	if err != nil {
+		t.Fatalf("ServeHTTP failed: %v", err)
+	}
+	// This request should succeed (404) because it's the 2nd error which triggers the ban
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected status code 404 before ban, got %d", rec.Code)
+	}
+
+	// Now verify we are banned on the next request
+	rec = httptest.NewRecorder()
+	err = m.ServeHTTP(rec, reqAPI, next)
+	if err != nil {
+		t.Fatalf("ServeHTTP failed: %v", err)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected status code 403 (banned), got %d", rec.Code)
+	}
+}
+
+// TestMiddleware_UnmarshalCaddyfile_WithErrorCountTimeout tests Caddyfile parsing with error_count_timeout
+func TestMiddleware_UnmarshalCaddyfile_WithErrorCountTimeout(t *testing.T) {
+	m := Middleware{}
+	d := caddyfile.NewTestDispenser(`
+	caddy_mib {
+		error_codes 404 500
+		max_error_count 5
+		ban_duration 10m
+		error_count_timeout 1h
+		per_path /admin {
+			error_codes 401
+			max_error_count 3
+			ban_duration 30m
+			error_count_timeout 15m
+		}
+	}
+	`)
+
+	err := m.UnmarshalCaddyfile(d)
+	if err != nil {
+		t.Fatalf("UnmarshalCaddyfile failed: %v", err)
+	}
+
+	// Verify global error_count_timeout
+	if m.ErrorCountTimeout != caddy.Duration(1*time.Hour) {
+		t.Errorf("Expected error_count_timeout to be 1h, got %v", m.ErrorCountTimeout)
+	}
+
+	// Verify per-path error_count_timeout
+	pathConfig, ok := m.PerPathConfig["/admin"]
+	if !ok {
+		t.Fatal("Expected per_path config for /admin, but not found")
+	}
+
+	if pathConfig.ErrorCountTimeout != caddy.Duration(15*time.Minute) {
+		t.Errorf("Expected per_path error_count_timeout to be 15m, got %v", pathConfig.ErrorCountTimeout)
+	}
+}
+
+// TestMiddleware_NoErrorCountTimeout tests that without timeout, errors accumulate indefinitely
+func TestMiddleware_NoErrorCountTimeout(t *testing.T) {
+	m := Middleware{
+		ErrorCodes:        []int{404},
+		MaxErrorCount:     3,
+		BanDuration:       caddy.Duration(1 * time.Minute),
+		ErrorCountTimeout: 0, // Disabled
+	}
+	ctx := caddy.Context{}
+	m.Provision(ctx)
+
+	req := httptest.NewRequest("GET", "http://example.com/test", nil)
+	req.RemoteAddr = "192.168.1.1:12345"
+
+	next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusNotFound)
+		return nil
+	})
+
+	// Make 2 errors
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		err := m.ServeHTTP(rec, req, next)
+		if err != nil {
+			t.Fatalf("ServeHTTP failed: %v", err)
+		}
+	}
+
+	// Wait long time (would expire if timeout was set)
+	time.Sleep(3 * time.Second)
+
+	// Make one more error - should trigger ban (count was not reset)
+	rec := httptest.NewRecorder()
+	err := m.ServeHTTP(rec, req, next)
+	if err != nil {
+		t.Fatalf("ServeHTTP failed: %v", err)
+	}
+
+	// Verify banned (3rd error total)
+	rec = httptest.NewRecorder()
+	err = m.ServeHTTP(rec, req, next)
+	if err != nil {
+		t.Fatalf("ServeHTTP failed: %v", err)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected status code 403 (banned), got %d", rec.Code)
+	}
+}
+
+// TestMiddleware_CleanupDeletesAllPathsForIP tests the bug fix for cleanup
+func TestMiddleware_CleanupDeletesAllPathsForIP(t *testing.T) {
+	m := Middleware{
+		ErrorCodes:    []int{404},
+		MaxErrorCount: 5, // High enough to allow errors on all paths before ban
+		BanDuration:   caddy.Duration(1 * time.Second),
+	}
+	ctx := caddy.Context{}
+	m.Provision(ctx)
+
+	// Make errors on multiple paths for the same IP
+	paths := []string{"/path1", "/path2", "/path3"}
+	for _, path := range paths {
+		req := httptest.NewRequest("GET", "http://example.com"+path, nil)
+		req.RemoteAddr = "192.168.1.1:12345"
+		rec := httptest.NewRecorder()
+
+		next := caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+			w.WriteHeader(http.StatusNotFound)
+			return nil
+		})
+
+		err := m.ServeHTTP(rec, req, next)
+		if err != nil {
+			t.Fatalf("ServeHTTP failed: %v", err)
+		}
+	}
+
+	// Manually trigger a ban to test cleanup
+	m.bannedIPs.Store("192.168.1.1", time.Now().Add(1*time.Second))
+
+	// Verify error counts exist for all paths
+	for _, path := range paths {
+		key := "192.168.1.1:" + path
+		if _, ok := m.errorCounts.Load(key); !ok {
+			t.Errorf("Expected error count for path %s to exist", path)
+		}
+	}
+
+	// Wait for ban to expire and cleanup to run
+	time.Sleep(3 * time.Second)
+
+	// Verify all error counts were deleted
+	for _, path := range paths {
+		key := "192.168.1.1:" + path
+		if _, ok := m.errorCounts.Load(key); ok {
+			t.Errorf("Expected error count for path %s to be deleted, but it still exists", path)
+		}
+	}
+}
