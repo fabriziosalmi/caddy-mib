@@ -66,6 +66,58 @@ type errorTracker struct {
 	LastErrorAt   time.Time
 }
 
+// incrementErrorTracker atomically increments the error count for a key.
+// It uses a CAS loop to avoid lost updates under concurrent requests.
+func (m *Middleware) incrementErrorTracker(key string, timeout time.Duration) errorTracker {
+	for {
+		now := time.Now()
+
+		val, ok := m.errorCounts.Load(key)
+		if !ok {
+			tracker := errorTracker{
+				Count:        1,
+				FirstErrorAt: now,
+				LastErrorAt:  now,
+			}
+			if actual, loaded := m.errorCounts.LoadOrStore(key, tracker); !loaded {
+				return tracker
+			} else {
+				val = actual
+			}
+		}
+
+		current, ok := val.(errorTracker)
+		if !ok {
+			tracker := errorTracker{
+				Count:        1,
+				FirstErrorAt: now,
+				LastErrorAt:  now,
+			}
+			m.errorCounts.Store(key, tracker)
+			return tracker
+		}
+
+		updated := current
+		if timeout > 0 && now.Sub(current.LastErrorAt) > timeout {
+			updated = errorTracker{
+				Count:        1,
+				FirstErrorAt: now,
+				LastErrorAt:  now,
+			}
+		} else {
+			updated.Count++
+			if updated.FirstErrorAt.IsZero() {
+				updated.FirstErrorAt = now
+			}
+			updated.LastErrorAt = now
+		}
+
+		if m.errorCounts.CompareAndSwap(key, current, updated) {
+			return updated
+		}
+	}
+}
+
 // CaddyModule returns the Caddy module information.
 func (Middleware) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
@@ -321,40 +373,7 @@ func (m *Middleware) trackErrorStatus(clientIP string, code int, path string, r 
 	// Use global configuration
 	for _, errCode := range m.ErrorCodes {
 		if code == errCode {
-			now := time.Now()
-
-			// Load or initialize error tracker
-			var tracker errorTracker
-			if val, ok := m.errorCounts.Load(key); ok {
-				tracker = val.(errorTracker)
-
-				// Implement sliding window: reset count if timeout has passed
-				if m.ErrorCountTimeout > 0 && now.Sub(tracker.LastErrorAt) > time.Duration(m.ErrorCountTimeout) {
-					m.logger.Debug("error count timeout expired, resetting count",
-						zap.String("client_ip", clientIP),
-						zap.String("path", path),
-						zap.Duration("time_since_last_error", now.Sub(tracker.LastErrorAt)),
-						zap.Duration("timeout", time.Duration(m.ErrorCountTimeout)),
-					)
-					tracker = errorTracker{
-						Count:        1,
-						FirstErrorAt: now,
-						LastErrorAt:  now,
-					}
-				} else {
-					tracker.Count++
-					tracker.LastErrorAt = now
-				}
-			} else {
-				// First error for this IP:path
-				tracker = errorTracker{
-					Count:        1,
-					FirstErrorAt: now,
-					LastErrorAt:  now,
-				}
-			}
-
-			m.errorCounts.Store(key, tracker)
+			tracker := m.incrementErrorTracker(key, time.Duration(m.ErrorCountTimeout))
 			m.logger.Debug("error count incremented", append(commonFields,
 				zap.Int("current_error_count", tracker.Count),
 				zap.Int("max_error_count", m.MaxErrorCount),
@@ -416,46 +435,13 @@ func (m *Middleware) trackErrorsForPath(clientIP string, code int, path string, 
 
 	for _, errCode := range config.ErrorCodes {
 		if code == errCode {
-			now := time.Now()
-
 			// Determine which timeout to use (per-path or global)
 			timeout := config.ErrorCountTimeout
 			if timeout == 0 {
 				timeout = m.ErrorCountTimeout
 			}
 
-			// Load or initialize error tracker
-			var tracker errorTracker
-			if val, ok := m.errorCounts.Load(key); ok {
-				tracker = val.(errorTracker)
-
-				// Implement sliding window: reset count if timeout has passed
-				if timeout > 0 && now.Sub(tracker.LastErrorAt) > time.Duration(timeout) {
-					m.logger.Debug("error count timeout expired for path, resetting count",
-						zap.String("client_ip", clientIP),
-						zap.String("path", path),
-						zap.Duration("time_since_last_error", now.Sub(tracker.LastErrorAt)),
-						zap.Duration("timeout", time.Duration(timeout)),
-					)
-					tracker = errorTracker{
-						Count:        1,
-						FirstErrorAt: now,
-						LastErrorAt:  now,
-					}
-				} else {
-					tracker.Count++
-					tracker.LastErrorAt = now
-				}
-			} else {
-				// First error for this IP:path
-				tracker = errorTracker{
-					Count:        1,
-					FirstErrorAt: now,
-					LastErrorAt:  now,
-				}
-			}
-
-			m.errorCounts.Store(key, tracker)
+			tracker := m.incrementErrorTracker(key, time.Duration(timeout))
 			m.logger.Debug("error count incremented for path", append(commonFields,
 				zap.Int("current_error_count", tracker.Count),
 				zap.Int("max_error_count", config.MaxErrorCount),

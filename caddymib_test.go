@@ -3,6 +3,7 @@ package caddymib
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -697,5 +698,51 @@ func TestMiddleware_CleanupDeletesAllPathsForIP(t *testing.T) {
 		if _, ok := m.errorCounts.Load(key); ok {
 			t.Errorf("Expected error count for path %s to be deleted, but it still exists", path)
 		}
+	}
+}
+
+func TestMiddleware_ConcurrentErrorCounting(t *testing.T) {
+	m := Middleware{
+		ErrorCodes:    []int{404},
+		MaxErrorCount: 1000000, // avoid bans during this test
+		BanDuration:   caddy.Duration(1 * time.Minute),
+	}
+	ctx := caddy.Context{}
+	m.Provision(ctx)
+
+	req := httptest.NewRequest("GET", "http://example.com/concurrent", nil)
+	req.RemoteAddr = "192.168.1.1:12345"
+	path := "/concurrent"
+	clientIP := "192.168.1.1"
+
+	const workers = 50
+	const perWorker = 200
+	expected := workers * perWorker
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < perWorker; j++ {
+				m.trackErrorStatus(clientIP, http.StatusNotFound, path, req)
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	key := clientIP + ":" + path
+	val, ok := m.errorCounts.Load(key)
+	if !ok {
+		t.Fatalf("Expected error tracker for key %s", key)
+	}
+
+	tracker := val.(errorTracker)
+	if tracker.Count != expected {
+		t.Fatalf("Expected count %d, got %d", expected, tracker.Count)
 	}
 }
