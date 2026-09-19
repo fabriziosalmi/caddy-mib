@@ -27,46 +27,30 @@ jobs:
           sudo apt update
           sudo apt install -y wget git build-essential
 
-      - name: Install Go 1.23.4
+      # The Go version comes from go.mod, so a dependency bump that raises the
+      # `go` directive does not fail on a hardcoded version check.
+      - name: Install Go (version from go.mod)
         uses: actions/setup-go@v4
         with:
-          go-version: '1.23.4'
+          go-version-file: go.mod
 
-      - name: Validate Go Installation
-        run: |
-          go version
-          if ! go version | grep -q "go1.23.4"; then
-            echo "Go installation failed or incorrect version"
-            exit 1
-          fi
+      - name: Show Go version
+        run: go version
 
-      - name: Clone caddy-adf Repository
-        run: |
-          git clone https://github.com/fabriziosalmi/caddy-mib.git
-          cd caddy-mib
-
-      - name: Validate Repository Cloning
-        run: |
-          if [ ! -d "caddy-mib" ]; then
-            echo "Repository cloning failed"
-            exit 1
-          fi
-
+      # Build what was checked out. This job used to `git clone` main from
+      # GitHub and build that copy, so on a pull request it never compiled the
+      # pull request's code. `go mod download` instead of `go mod tidy` + `go get`,
+      # which rewrote go.mod in CI and hid drift instead of catching it.
       - name: Install Go Dependencies
-        run: |
-          cd caddy-mib
-          go mod tidy
-          go get -v github.com/fabriziosalmi/caddy-mib github.com/caddyserver/caddy/v2 
+        run: go mod download
 
       - name: Build Caddy with caddy-mib
         run: |
-          cd caddy-mib
           go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
           xcaddy build --with github.com/fabriziosalmi/caddy-mib=./
 
       - name: Validate Build
         run: |
-          cd caddy-mib
           if [ ! -f "caddy" ]; then
             echo "Caddy build failed"
             exit 1
@@ -74,7 +58,6 @@ jobs:
           
       - name: Test Caddy Run and Validate MIB Provisioning
         run: |
-          cd caddy-mib
           chmod +x caddy
           ./caddy run > caddy_output.log 2>&1 &
           sleep 5
