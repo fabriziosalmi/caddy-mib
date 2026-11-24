@@ -40,26 +40,27 @@
 
 ## Installation
 
-### 1. Clone the Repository
-First, clone the Caddy MIB repository to your local machine:
+### 1. Build Caddy with the MIB Module
+`xcaddy` fetches the module itself, so no clone is needed:
+```bash
+xcaddy build --with github.com/fabriziosalmi/caddy-mib
+```
+
+### 2. Or build from a local checkout
+To build what is in a working tree, for example while changing the module:
 ```bash
 git clone https://github.com/fabriziosalmi/caddy-mib.git
 cd caddy-mib
-```
-
-### 2. Build Caddy with the MIB Module
-Use `xcaddy` to compile Caddy with the custom MIB module:
-```bash
 xcaddy build --with github.com/fabriziosalmi/caddy-mib=./
 ```
 
 ### 3. Verify the Installation
-Check the installed Caddy version to confirm the presence of `caddy-mib`:
+Check that the module is compiled in:
 ```bash
-./caddy version
+./caddy list-modules | grep caddy_mib
 ```
 
-You should see `caddy-mib` listed among the modules.
+You should see `http.handlers.caddy_mib`.
 
 ---
 
